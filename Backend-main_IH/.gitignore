@@ -1,0 +1,7 @@
+venv/
+venv312/
+__pycache__/
+*.pyc
+.env
+# Google service account key — never commit this
+service-account.json
