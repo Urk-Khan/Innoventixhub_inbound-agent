@@ -11,7 +11,7 @@ create table customers (
   name text,
   email text,
   purchased_services text,  -- free text, e.g. "AI Automation" or "AI Automation, Web Development"
-  created_at timestamp default now()
+  created_at timestamptz default now()
 );
 
 -- Written by mark_potential_lead (tools.py) whenever a caller shows real interest but
@@ -25,7 +25,7 @@ create table leads (
   reason text,
   status text default 'warm',
   call_id text,
-  created_at timestamp default now()
+  created_at timestamptz default now()
 );
 
 -- Audit-trail log of every successfully booked meeting (both sales and support). Google
@@ -42,7 +42,7 @@ create table meetings (
   time text,
   meet_link text,
   call_id text,
-  created_at timestamp default now()
+  created_at timestamptz default now()
 );
 
 -- Call log: written at the end of every call (success or failure). Contains a clean
@@ -55,5 +55,5 @@ create table if not exists call_logs (
   duration_seconds integer,
   transcript text,
   outcome text,  -- "meeting_booked" | "warm_lead" | "info_inquiry" | "transferred" | "dropped_call"
-  created_at timestamp default now()
+  created_at timestamptz default now()
 );

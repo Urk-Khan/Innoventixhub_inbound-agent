@@ -113,11 +113,16 @@ def _headers(api_version: str) -> dict:
 
 
 def format_display(start_time_iso: str) -> tuple[str, str]:
-    """ISO datetime -> (date, time) display strings in TIMEZONE, for the LLM to read aloud.
-    Purely cosmetic — book_slot keys off the raw start string, not these strings."""
+    """ISO datetime -> (date, time) display strings in the configured TIMEZONE, for the LLM
+    to read aloud. Purely cosmetic — book_slot keys off the raw start string, not these
+    strings. Reads TIMEZONE fresh (not the module-level constant) for the same reason
+    booking_db.py now reads its config fresh — see that file's _get_config for the full
+    explanation of why a module-level `os.getenv` constant can get permanently stuck on a
+    stale default if this module is ever imported before .env is loaded."""
     from zoneinfo import ZoneInfo
 
-    dt = datetime.fromisoformat(start_time_iso.replace("Z", "+00:00")).astimezone(ZoneInfo(TIMEZONE))
+    tz_name = os.getenv("TIMEZONE", "UTC")
+    dt = datetime.fromisoformat(start_time_iso.replace("Z", "+00:00")).astimezone(ZoneInfo(tz_name))
     time_str = dt.strftime("%I:%M %p").lstrip("0") or dt.strftime("%I:%M %p")
     return dt.strftime("%Y-%m-%d"), time_str
 
@@ -144,6 +149,7 @@ async def get_open_slots(meeting_type: str, limit: int = 15) -> list[dict]:
     for the LLM to read aloud."""
     api_key = os.getenv("CAL_API_KEY", "")
     lookahead_days = int(os.getenv("CAL_LOOKAHEAD_DAYS", "14"))
+    tz_name = os.getenv("TIMEZONE", "UTC")
 
     if not api_key:
         logger.error("CAL_API_KEY not set in .env")
@@ -166,7 +172,7 @@ async def get_open_slots(meeting_type: str, limit: int = 15) -> list[dict]:
         "username": username,
         "start": start,
         "end": end,
-        "timeZone": TIMEZONE,
+        "timeZone": tz_name,
     }
 
     try:
@@ -218,7 +224,7 @@ async def book_slot(
     attendee = {
         "name": customer_name,
         "email": email,
-        "timeZone": TIMEZONE,
+        "timeZone": os.getenv("TIMEZONE", "UTC"),
         "language": "en",
     }
     if phone:

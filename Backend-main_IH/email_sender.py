@@ -23,9 +23,6 @@ import os
 import aiohttp
 from loguru import logger
 
-RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
-RESEND_FROM_ADDRESS = os.getenv("RESEND_FROM_ADDRESS", "")
-
 _RESEND_API_URL = "https://api.resend.com/emails"
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=8)
 
@@ -42,7 +39,10 @@ async def send_meeting_confirmation(
     """Returns {"success": bool, "error": str | None}. Never raises — a failed confirmation
     email shouldn't crash the booking flow; the caller already heard the booking confirmed
     on the call itself, this is a nice-to-have follow-up."""
-    if not RESEND_API_KEY or not RESEND_FROM_ADDRESS:
+    resend_api_key = os.getenv("RESEND_API_KEY", "")
+    resend_from_address = os.getenv("RESEND_FROM_ADDRESS", "")
+
+    if not resend_api_key or not resend_from_address:
         logger.error("RESEND_API_KEY or RESEND_FROM_ADDRESS not set in .env")
         return {"success": False, "error": "email_not_configured"}
 
@@ -66,12 +66,12 @@ async def send_meeting_confirmation(
     """
 
     payload = {
-        "from": RESEND_FROM_ADDRESS,
+        "from": resend_from_address,
         "to": [to],
         "subject": f"Innoventix Hub — {label} Confirmed: {date} at {time_str}",
         "html": html,
     }
-    headers = {"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {resend_api_key}", "Content-Type": "application/json"}
 
     try:
         async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
@@ -99,7 +99,10 @@ async def send_booking_fallback_email(
     tool when the caller wants a link instead of booking live on the call. Returns
     {"success": bool, "error": str | None}. Never raises — a failed email must never surface
     as an error on the call."""
-    if not RESEND_API_KEY or not RESEND_FROM_ADDRESS:
+    resend_api_key = os.getenv("RESEND_API_KEY", "")
+    resend_from_address = os.getenv("RESEND_FROM_ADDRESS", "")
+
+    if not resend_api_key or not resend_from_address:
         logger.error("RESEND_API_KEY or RESEND_FROM_ADDRESS not set — cannot send fallback email")
         return {"success": False, "error": "email_not_configured"}
 
@@ -121,12 +124,12 @@ async def send_booking_fallback_email(
     """
 
     payload = {
-        "from": RESEND_FROM_ADDRESS,
+        "from": resend_from_address,
         "to": [to],
         "subject": "Innoventix Hub — Complete Your Booking",
         "html": html,
     }
-    headers = {"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {resend_api_key}", "Content-Type": "application/json"}
 
     try:
         async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:

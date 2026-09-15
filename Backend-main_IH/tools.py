@@ -32,7 +32,9 @@ def _normalize_email(raw: str) -> str:
       'j-o-h-n at company dot com' -> 'john@company.com'
     Strips accidental whitespace throughout.
     """
-    s = raw.lower().strip()
+    if not raw:
+        return ""
+    s = str(raw).lower().strip()
     # Replace spoken punctuation
     s = re.sub(r"\s+dot\s+", ".", s)       # "dot" -> "."
     s = re.sub(r"\s+at\s+", "@", s)        # "at" -> "@"

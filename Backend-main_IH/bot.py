@@ -43,6 +43,9 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -66,8 +69,6 @@ from prompts import GREETING_EN, INNOVENTIX_SYSTEM_PROMPT
 from tools import INNOVENTIX_TOOLS
 from warmup import warmup_all
 import booking_db
-
-load_dotenv(override=True)
 
 # Same VAD tuning proven out on the Ashad project — tuned to ignore background speech and
 # ambient room/road noise on real phone calls.

@@ -25,16 +25,24 @@ import os
 import aiohttp
 from loguru import logger
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
-
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=6)  # keep it fast; caller is on hold
 
 
-def _headers(prefer: str = "return=representation") -> dict:
+def _get_config() -> tuple[str, str]:
+    """Reads SUPABASE_URL/SUPABASE_SERVICE_KEY fresh on every call, rather than once at
+    import time. This matters because Python evaluates module-level code (including
+    `os.getenv(...)` at the top of a file) the instant the module is imported — if
+    `import booking_db` happens before `load_dotenv()` runs (as it did in bot.py until this
+    fix), a module-level constant would be permanently frozen as "" for the life of the
+    process, even though .env gets loaded correctly moments later. Reading fresh inside each
+    function makes this module correct regardless of import order in whatever script uses it."""
+    return os.getenv("SUPABASE_URL", "").rstrip("/"), os.getenv("SUPABASE_SERVICE_KEY", "")
+
+
+def _headers(service_key: str, prefer: str = "return=representation") -> dict:
     return {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "apikey": service_key,
+        "Authorization": f"Bearer {service_key}",
         "Content-Type": "application/json",
         "Prefer": prefer,
     }
@@ -44,14 +52,15 @@ async def get_customer_by_phone(phone: str) -> dict | None:
     """Looks up a customer by phone number for the pre-greeting context injection in
     bot.py. Returns None if not configured, not found, or on any error — bot.py treats
     None as "unknown caller" and proceeds with a plain greeting, so this fails safe."""
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY or not phone:
+    supabase_url, supabase_key = _get_config()
+    if not supabase_url or not supabase_key or not phone:
         return None
 
-    url = f"{SUPABASE_URL}/rest/v1/customers?phone=eq.{phone}&select=*"
+    url = f"{supabase_url}/rest/v1/customers?phone=eq.{phone}&select=*"
 
     try:
         async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
-            async with session.get(url, headers=_headers()) as resp:
+            async with session.get(url, headers=_headers(supabase_key)) as resp:
                 if resp.status >= 400:
                     logger.error(f"Customer lookup failed ({resp.status}): {await resp.text()}")
                     return None
@@ -73,7 +82,8 @@ async def create_lead(
 ) -> dict:
     """Logs a warm lead — a caller who showed real interest but didn't book. Returns
     {"success": bool, "error": str | None}."""
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+    supabase_url, supabase_key = _get_config()
+    if not supabase_url or not supabase_key:
         logger.error("SUPABASE_URL or SUPABASE_SERVICE_KEY not set in .env")
         return {"success": False, "error": "db_not_configured"}
 
@@ -89,9 +99,9 @@ async def create_lead(
     try:
         async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
             async with session.post(
-                f"{SUPABASE_URL}/rest/v1/leads",
+                f"{supabase_url}/rest/v1/leads",
                 json=payload,
-                headers=_headers(prefer="return=minimal"),
+                headers=_headers(supabase_key, prefer="return=minimal"),
             ) as resp:
                 if resp.status >= 400:
                     body = await resp.text()
@@ -117,10 +127,12 @@ async def log_meeting(
     meet_link: str | None,
     call_id: str | None,
 ) -> None:
-    """Fire-and-forget audit log of a successfully booked meeting. Never raises — Sheets and
-    Calendar are the real bookings; this is reporting only, so a logging failure here should
-    never surface as a booking failure to the caller."""
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+    """Fire-and-forget audit log of a successfully booked meeting. Never raises — Cal.com is
+    the real booking; this is reporting only, so a logging failure here should never surface
+    as a booking failure to the caller."""
+    supabase_url, supabase_key = _get_config()
+    if not supabase_url or not supabase_key:
+        logger.error("SUPABASE_URL or SUPABASE_SERVICE_KEY not set in .env — meeting not logged")
         return
 
     payload = {
@@ -138,9 +150,9 @@ async def log_meeting(
     try:
         async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
             async with session.post(
-                f"{SUPABASE_URL}/rest/v1/meetings",
+                f"{supabase_url}/rest/v1/meetings",
                 json=payload,
-                headers=_headers(prefer="return=minimal"),
+                headers=_headers(supabase_key, prefer="return=minimal"),
             ) as resp:
                 if resp.status >= 400:
                     logger.warning(f"Meeting log insert failed ({resp.status}): {await resp.text()}")
@@ -161,15 +173,25 @@ async def save_call_record(
     `messages` is the raw LLM context message list (list of dicts with 'role' and 'content').
     Only 'user' and 'assistant' turns with non-system content are included in the transcript.
     """
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+    supabase_url, supabase_key = _get_config()
+    if not supabase_url or not supabase_key:
+        logger.error("SUPABASE_URL or SUPABASE_SERVICE_KEY not set in .env — call not logged")
         return
 
     # Build a clean dialog transcript, skipping internal system injections.
     lines = []
     for msg in messages:
-        role = msg.get("role", "")
-        content = str(msg.get("content", "")).strip()
-        if not content:
+        if isinstance(msg, dict):
+            role = msg.get("role", "")
+            raw_content = msg.get("content")
+        else:
+            role = getattr(msg, "role", "")
+            raw_content = getattr(msg, "content", "")
+
+        if raw_content is None:
+            continue
+        content = str(raw_content).strip()
+        if not content or content == "None":
             continue
         # Skip internal context-injection messages (bracketed system notes).
         if content.startswith("[") and content.endswith("]"):
@@ -207,9 +229,9 @@ async def save_call_record(
     try:
         async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
             async with session.post(
-                f"{SUPABASE_URL}/rest/v1/call_logs",
+                f"{supabase_url}/rest/v1/call_logs",
                 json=payload,
-                headers=_headers(prefer="return=minimal"),
+                headers=_headers(supabase_key, prefer="return=minimal"),
             ) as resp:
                 if resp.status >= 400:
                     logger.warning(f"Call log insert failed ({resp.status}): {await resp.text()}")

@@ -152,9 +152,65 @@ the `leads` table with `status="warm"`. Only for genuine hesitation, not outrigh
 
 ---
 
-## Changelog
+### 2026-09-15 — Comprehensive Deep Testing & Final Verification of All Call Scenarios
 
-Add a new dated entry above the previous ones (newest first) every time something changes.
+Conducted a deep audit and automated verification across all system components, integrations, and call paths:
+
+1. **`test_scenario.py` Rebuild & Expansion**: Replaced out-of-date Calendly references with Cal.com (`cal_com.py`), updated tool schemas to include `send_booking_link`, and expanded the test suite from 3 basic flows to **7 comprehensive scenarios**:
+   - **Scenario A (Sales Booking)**: `check_availability` -> user slot selection -> `book_meeting` -> Cal.com booking -> Resend confirmation email -> Supabase meeting audit log.
+   - **Scenario B (Warm Lead)**: Caller hesitates -> `mark_potential_lead` -> Supabase `leads` table logged as `status="warm"`.
+   - **Scenario C (General Info Inquiry)**: Prompt knowledge base Q&A -> direct conversational answer with zero tool overhead.
+   - **Scenario D (Cross-sell - Known Customer)**: Context injection on caller lookup -> natural pitch for complementary service (AI Voice Agents) -> transition to sales booking.
+   - **Scenario E (Support Escalation - Known Customer)**: Technical issue gap -> `check_availability(meeting_type="support")` -> `book_meeting` with specific issue topic -> support meeting booked.
+   - **Scenario F (Booking Link Request)**: Caller requests link by email -> `send_booking_link` -> fallback email sent without touching calendar.
+   - **Scenario G (Immediate Human Transfer)**: Urgent production failure -> `transfer_to_human`.
+
+2. **Fixed `booking_db.py` Call Log Transcript Formatting**: `save_call_record` previously converted `msg.get("content")` to `str()` directly, turning `None` content (typical of assistant tool-call messages) into the literal string `"None"` in saved Supabase call transcripts. Added an explicit `if raw_content is None: continue` check.
+
+3. **Guarded `_normalize_email()` in `tools.py`**: Added explicit null/non-string checks (`if not raw: return ""`) to prevent `AttributeError` if `email` is omitted or `None` in tool parameters.
+
+4. **Upgraded `test_console_chat.py`**: Added full live function-calling tool execution to terminal chat mode so interactive console testing matches the full voice pipeline capability.
+
+### 2026-09-15 — Fixed Supabase tables (leads, meetings, call_logs) staying permanently empty
+
+Reported symptom: leads, meetings, and call_logs tables all stayed empty despite calls
+happening and (separately) emails sending correctly — which was the key clue, since it
+meant credentials in `.env` were fine and being loaded correctly by SOMETHING, just not by
+`booking_db.py`.
+
+**Root cause**: `booking_db.py` read `SUPABASE_URL`/`SUPABASE_SERVICE_KEY` as **module-level
+constants** — `SUPABASE_URL = os.getenv(...)` at the top of the file, evaluated exactly once,
+the instant the module is imported. In `bot.py`, `import booking_db` happened at line 68,
+while `load_dotenv(override=True)` didn't run until line 70 — two lines later. Since Python
+executes a module's top-level code immediately on import, `booking_db.py`'s constants got
+permanently frozen as empty strings before `.env` was ever loaded, for the entire lifetime of
+the process. Every function's `if not SUPABASE_URL or not SUPABASE_SERVICE_KEY: return`
+guard then silently short-circuited forever — including `get_customer_by_phone`, meaning the
+known-caller cross-sell context injection had also likely never fired, a second symptom that
+hadn't been noticed yet.
+
+`email_sender.py` had the exact same pattern (module-level `RESEND_API_KEY`/
+`RESEND_FROM_ADDRESS`) but happened not to exhibit the bug in the version tested, because
+whichever script/order was used at the time loaded `.env` before importing it — this is
+exactly the kind of bug that depends on import order and can appear to "work" in one script
+and silently fail in another that imports the same modules in a different sequence.
+
+**Fix** (defense in depth, three layers):
+1. `booking_db.py` and `email_sender.py` now read their env vars fresh inside every function
+   (`_get_config()` helper in booking_db.py) instead of once at import time — matching the
+   pattern `cal_com.py`'s API-key reads already used correctly. This makes both modules
+   correct regardless of import order, in this script or any other that imports them.
+2. `cal_com.py`'s `TIMEZONE` constant had the identical latent issue (used directly in
+   `format_display`/`get_open_slots`/`book_slot` instead of re-read) — fixed the same way.
+3. `bot.py` now calls `load_dotenv(override=True)` immediately after importing `dotenv`,
+   before any of the project's own modules are imported, removing the root cause outright
+   rather than relying solely on every module being individually import-order-safe.
+
+Also added error logging to `log_meeting`/`save_call_record`'s "not configured" early
+returns — previously these failed completely silently (no log line at all), unlike
+`create_lead` which did log an error. All three now log clearly if Supabase isn't reachable,
+so this class of bug is visible in the logs immediately next time rather than requiring a
+line-by-line code read to find.
 
 ### 2026-09-14 — Fixed premature/unconfirmed bookings and abrupt call-ending
 
