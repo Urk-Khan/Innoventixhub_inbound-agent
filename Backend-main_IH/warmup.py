@@ -36,15 +36,17 @@ from loguru import logger
 
 
 def preload_vad_model() -> None:
-    """Synchronous — forces the Silero ONNX model to load once, into OS file cache."""
+    """Synchronous — forces the Silero ONNX model and Smart Turn ONNX model to load once, into OS file cache."""
     from pipecat.audio.vad.silero import SileroVADAnalyzer
+    from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 
     start = time.monotonic()
     try:
         SileroVADAnalyzer()  # constructed, then immediately discarded — the load is the point
-        logger.info(f"VAD model preloaded in {time.monotonic() - start:.2f}s")
+        LocalSmartTurnAnalyzerV3()  # pre-warms smart-turn ONNX session
+        logger.info(f"VAD + Smart Turn models preloaded in {time.monotonic() - start:.2f}s")
     except Exception as e:
-        logger.warning(f"VAD preload failed (non-fatal, first call will just be slower): {e}")
+        logger.warning(f"VAD/Turn preload failed (non-fatal, first call will just be slower): {e}")
 
 
 async def _warmup_one(name: str, connect_coro, disconnect_coro) -> None:

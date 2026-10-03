@@ -91,7 +91,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "transfer_to_human",
-            "description": "Transfer the call to a human agent immediately.",
+            "description": "Flag an urgent request for a human. Live transfer is not wired up yet — check transferred:false in the result.",
             "parameters": {
                 "type": "object",
                 "properties": {"reason": {"type": "string"}},
@@ -103,8 +103,12 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "end_call",
-            "description": "End the call when there is nothing left to do.",
-            "parameters": {"type": "object", "properties": {}},
+            "description": "End the call politely after saying a warm farewell.",
+            "parameters": {
+                "type": "object",
+                "properties": {"farewell": {"type": "string"}},
+                "required": ["farewell"],
+            },
         },
     },
 ]
@@ -186,11 +190,14 @@ async def handle_tool(name: str, args: dict) -> str:
         return json.dumps(result)
 
     elif name == "transfer_to_human":
-        print(f"  [TOOL] transfer_to_human(reason={args.get('reason')})")
-        return json.dumps({"success": True, "transferring": True})
+        print(f"  [TOOL] transfer_to_human(reason={args.get('reason')}) -> transferred=False (not wired up)")
+        return json.dumps({"success": True, "transferred": False, "reason_logged": args.get("reason")})
 
     elif name == "end_call":
-        print("  [TOOL] end_call() — call ended.")
+        farewell = args.get("farewell", "")
+        print(f"  [TOOL] end_call(farewell={farewell!r}) — call ended.")
+        if not farewell.strip():
+            print("  [WARN] end_call called with an empty farewell — this should never happen.")
         return json.dumps({"success": True})
 
     return json.dumps({"error": "unknown_tool"})

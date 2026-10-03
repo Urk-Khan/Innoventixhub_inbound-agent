@@ -24,7 +24,7 @@ import openai
 import booking_db
 import cal_com as scheduler
 import email_sender
-from prompts import INNOVENTIX_SYSTEM_PROMPT
+from prompts import INNOVENTIX_SYSTEM_PROMPT, get_system_prompt
 from tools import _normalize_email
 
 # ---------------------------------------------------------------------------
@@ -93,6 +93,16 @@ SCENARIOS = {
         "context": None,
         "turns": [
             "Hi, our payment gateway is down and production servers are throwing 500 errors! I need to talk to a human engineer immediately!",
+        ],
+    },
+    "H — Whole Week Availability & Day Selection": {
+        "context": None,
+        "turns": [
+            "Hi, I want to talk to your team about building an AI voice agent for our customer support.",
+            "Can you tell me what days and times you have open across this entire week?",
+            "What options do you have specifically on Thursday?",
+            "Let's book Thursday. My name is Alex, email is alex dot test at innoventix dot com.",
+            "Yes, that's confirmed.",
         ],
     },
 }
@@ -165,7 +175,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "transfer_to_human",
-            "description": "Transfer the call to a human agent immediately.",
+            "description": "Flag an urgent request for a human. Live transfer is not wired up yet — check transferred:false in the result.",
             "parameters": {
                 "type": "object",
                 "properties": {"reason": {"type": "string"}},
@@ -177,8 +187,12 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "end_call",
-            "description": "End the call when there is nothing left to do.",
-            "parameters": {"type": "object", "properties": {}},
+            "description": "End the call politely after saying a warm farewell.",
+            "parameters": {
+                "type": "object",
+                "properties": {"farewell": {"type": "string"}},
+                "required": ["farewell"],
+            },
         },
     },
 ]
@@ -189,12 +203,23 @@ async def handle_tool(name: str, args: dict) -> str:
     if name == "check_availability":
         mtype = args.get("meeting_type", "sales")
         print(f"  [TOOL] check_availability(meeting_type={mtype})")
-        slots = await scheduler.get_open_slots(mtype, limit=5)
+        slots = await scheduler.get_open_slots(mtype, limit=20)
+        seen_days = []
+        for s in slots:
+            d = s.get("date", "")
+            if d and d not in seen_days:
+                seen_days.append(d)
+        week_summary = f"Openings available across {len(seen_days)} days this week: {', '.join(seen_days)}."
         if slots:
-            print(f"  [OK] Returned {len(slots)} open slots. First slot: {slots[0]['date']} {slots[0]['time']}")
+            print(f"  [OK] Returned {len(slots)} open slots across {len(seen_days)} days ({', '.join(seen_days)})")
         else:
             print("  [WARN] No slots returned")
-        return json.dumps({"success": True, "slots": slots})
+        return json.dumps({
+            "success": True,
+            "week_summary": week_summary,
+            "available_days": seen_days,
+            "slots": slots,
+        })
 
     elif name == "book_meeting":
         email = _normalize_email(args.get("email", ""))
@@ -272,11 +297,14 @@ async def handle_tool(name: str, args: dict) -> str:
         return json.dumps(result)
 
     elif name == "transfer_to_human":
-        print(f"  [TOOL] transfer_to_human(reason={args.get('reason')})")
-        return json.dumps({"success": True, "transferring": True})
+        print(f"  [TOOL] transfer_to_human(reason={args.get('reason')}) -> transferred=False (not wired up)")
+        return json.dumps({"success": True, "transferred": False, "reason_logged": args.get("reason")})
 
     elif name == "end_call":
-        print("  [TOOL] end_call() — call ended.")
+        farewell = args.get("farewell", "")
+        print(f"  [TOOL] end_call(farewell={farewell!r}) — call ended.")
+        if not farewell.strip():
+            print("  [WARN] end_call called with an empty farewell — this should never happen.")
         return json.dumps({"success": True})
 
     return json.dumps({"error": "unknown_tool"})
@@ -290,7 +318,7 @@ async def run_scenario(label: str, spec: dict, client, model: str):
     print(f"  SCENARIO: {label}")
     print("=" * 70)
 
-    messages = [{"role": "system", "content": INNOVENTIX_SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": get_system_prompt()}]
     if spec.get("context"):
         messages.append({"role": "user", "content": spec["context"]})
 

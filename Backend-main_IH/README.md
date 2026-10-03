@@ -1,100 +1,204 @@
-# Innoventix Hub — Inbound AI Voice Agent
+# Innoventix Hub — Inbound AI Voice Agent (Backend)
 
-Handles four call scenarios — info/support, sales, cross-sell, and support escalation — plus
-warm-lead tracking for callers who don't commit. Books meetings via Google Sheets +
-Calendar (which generates a real Google Meet link) and sends confirmation emails via Resend.
-Cartesia (STT+TTS) + OpenAI/Anthropic (LLM) + Telnyx (telephony) + Supabase (CRM-lite). No
-N8N — every integration is a direct API call from Python.
+An ultra-low latency, tech-enabled AI voice receptionist ("Clara") built for **Innoventix Hub** ([innoventixhub.tech](https://innoventixhub.tech)). Handles incoming phone calls, answers service and pricing inquiries, checks calendar availability, books live meetings with Google Meet links, captures warm leads, and performs live call transfers to a human team member.
 
-**For architecture, the full scenario breakdown, and the running changelog, see
-[`PROJECT_DOCUMENTATION.md`](./PROJECT_DOCUMENTATION.md).** This README is just the "get it
-running" steps.
+Built with **Pipecat 1.8.1**, **Telnyx** (telephony), **Cartesia** (real-time STT & TTS), **OpenAI / Anthropic** (LLM reasoning), **Cal.com** (scheduling), **Resend** (email delivery), and **Supabase** (CRM & call logs).
 
-## 1. Install
+---
 
+## Key Features
+
+- **Sub-Second Voice Pipeline:** Powered by Cartesia Ink-Whisper STT and Sonic TTS with Silero VAD for natural conversational pacing and responsive barge-in handling.
+- **Automated Telnyx Tunneling:** Automatically spins up a `cloudflared` tunnel on launch and updates your Telnyx TeXML Application Voice URL via REST API (`auto_tunnel.py`).
+- **Cal.com Scheduling:** Fetches real-time open slots across the upcoming week and books meetings directly via Cal.com API, generating Google Meet links and sending branded email confirmations.
+- **Live Call Transfer:** Dynamically transfers callers to a human specialist (`TRANSFER_PHONE_NUMBER`) via Telnyx Call Control API (`transfer_to_human`), with graceful caller announcement and line bridging.
+- **AI Outcome Classification:** Classifies every call in Supabase `call_logs` with high precision (`meeting_booked`, `warm_lead`, `info_inquiry`, `transferred`, `dropped_call`), preventing false positives.
+- **Automated Warm Lead Capture:** Automatically captures callers who request email details, booking links, or have budget/timeline hesitations into the Supabase `leads` table.
+- **Jitter-Free Call Recording:** Real-time bidirectional audio capture tap that records stutter-free, level-balanced `.wav` audio files into `call_recordings/`.
+
+---
+
+## Architecture Overview
+
+```
+                      ┌─────────────────────────────────────────┐
+                      │          Inbound Phone Call             │
+                      │         (+18555010702 / Telnyx)         │
+                      └────────────────────┬────────────────────┘
+                                           │
+                                           ▼
+                      ┌─────────────────────────────────────────┐
+                      │   Cloudflare Tunnel -> FastAPI /ws      │
+                      │         (Pipecat 1.8.1 Server)          │
+                      └────────────────────┬────────────────────┘
+                                           │
+                    ┌──────────────────────┴──────────────────────┐
+                    ▼                                             ▼
+          ┌───────────────────┐                         ┌───────────────────┐
+          │   Cartesia STT    │                         │   Cartesia TTS    │
+          │   (Audio -> Text) │                         │   (Text -> Audio) │
+          └─────────┬─────────┘                         └─────────▲─────────┘
+                    │                                             │
+                    ▼                                             │
+          ┌───────────────────────────────────────────────────────┴─────────┐
+          │                   LLM Reasoning (OpenAI / Anthropic)            │
+          │                  Clara Receptionist System Prompt               │
+          └───────────────────────────────┬─────────────────────────────────┘
+                                          │
+                  ┌───────────────────────┼───────────────────────┐
+                  ▼                       ▼                       ▼
+        ┌───────────────────┐   ┌───────────────────┐   ┌───────────────────┐
+        │  Cal.com Booking  │   │   Live Transfer   │   │     Supabase      │
+        │  & Email (Resend) │   │  (Telnyx Bridge)  │   │  (Leads & Logs)   │
+        └───────────────────┘   └───────────────────┘   └───────────────────┘
+```
+
+---
+
+## Supported Call Scenarios
+
+| Scenario | Trigger / Intent | Action / Tool Used |
+|---|---|---|
+| **1. Info / General Q&A** | Questions about services, website, background | Answers conversationally; logs as `info_inquiry`. |
+| **2. Sales & Scoping** | Inquiring about purchasing a project or pricing | Offers scoping meeting; checks availability via Cal.com. |
+| **3. Meeting Booking** | Caller selects open calendar slot & confirms email | Books via `book_meeting`, logs to Supabase, sends Resend confirmation. |
+| **4. Warm Lead / Busy** | Caller wants email details/link or needs to check budget | Calls `send_booking_link` / `mark_potential_lead`; logs to `leads`. |
+| **5. Support Escalation** | Existing customer with unresolved technical issue | Offers support meeting via Cal.com (`meeting_type="support"`). |
+| **6. Live Call Transfer** | Caller requests human agent, specialist, or urgent help | Executes `transfer_to_human` via Telnyx to `TRANSFER_PHONE_NUMBER`. |
+
+---
+
+## Prerequisites & Installation
+
+### 1. Python Environment (Python 3.10 – 3.14)
 ```powershell
+# Clone or navigate to the directory
+cd Backend-main_IH
+
+# Create virtual environment
 python -m venv venv
 .\venv\Scripts\Activate.ps1
+
+# Upgrade pip & install dependencies
 pip install --upgrade pip
 pip install -r requirements.txt
+```
+
+### 2. Environment Configuration (`.env`)
+Copy the sample environment file:
+```powershell
 Copy-Item .env.example .env
 ```
 
-## 2. Set up the three integrations
+Configure your credentials in `.env`:
 
-Follow `PROJECT_DOCUMENTATION.md` section 5 for each:
-- **Google Sheets + Calendar** — one service account, two APIs enabled, spreadsheet with
-  `Sales_Slots`/`Support_Slots` tabs, calendar(s) shared with the service account
-- **Resend** — API key + a from-address
-- **Supabase** — run `innoventix_schema.sql`, fill in the URL/service key
-
-## 3. Fill in the rest of `.env`
-
-```
-TELNYX_API_KEY=...
+```ini
+# ---- Telephony: Telnyx ----
+TELNYX_API_KEY=KEY...
 TELNYX_ACCOUNT_SID=...
-TELNYX_TEXML_APP_ID=...      # see step 5 below for how to get this
-CARTESIA_API_KEY=...
-CARTESIA_VOICE_ID=...
+TELNYX_TEXML_APP_ID=...
+TELNYX_PHONE_NUMBER=+18555010702
+
+# ---- Live Call Transfer Destination ----
+TRANSFER_PHONE_NUMBER=+19177954404
+
+# ---- STT & TTS: Cartesia ----
+CARTESIA_API_KEY=sk_car_...
+CARTESIA_VOICE_ID=263b9cc0-0d99-44e7-ae92-3d4ad5d2ad18
+
+# ---- LLM: OpenAI or Anthropic ----
 LLM_PROVIDER=openai
-OPENAI_API_KEY=...
-TIMEZONE=Europe/London        # or whatever's actually correct — this matters
+OPENAI_API_KEY=sk-proj-...
+OPENAI_MODEL=gpt-5.4-mini
+
+# ---- Scheduling: Cal.com ----
+CAL_API_KEY=cal_live_...
+CAL_BOOKING_URL=https://cal.com/your-team/30min
+CAL_LOOKAHEAD_DAYS=14
+TIMEZONE=Asia/Karachi
+
+# ---- Supabase: Database & CRM ----
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=sb_secret_...
+
+# ---- Email: Resend ----
+RESEND_API_KEY=re_...
+RESEND_FROM_ADDRESS=Innoventix Hub <hello@innoventixhub.tech>
 ```
 
-## 4. Test without a phone call
+### 3. Database Setup (Supabase)
+Run the SQL schema provided in [`innoventix_schema.sql`](./innoventix_schema.sql) in your Supabase SQL Editor. This sets up:
+- `customers` (Pre-existing customer records for cross-sell context)
+- `leads` (Warm leads captured during calls)
+- `meetings` (Audit log of booked Cal.com appointments)
+- `call_logs` (Full call transcripts, durations, and classified outcomes)
 
+---
+
+## Running the Bot
+
+### One-Command Startup
+```powershell
+python bot.py
+```
+*(Or double-click `start_bot.bat`)*
+
+**What this command does automatically:**
+1. Spawns `cloudflared` to establish a secure public HTTPS/WSS tunnel.
+2. Updates your Telnyx TeXML Application's Voice URL to point to the active tunnel.
+3. Pre-warms the Silero VAD and Cartesia WebSocket connection path.
+4. Starts the Pipecat WebSocket server on `http://localhost:7860/ws`.
+
+---
+
+## Testing & Verification
+
+### 1. Interactive Terminal Chat
+Test conversational responses and prompts in your console without placing a phone call:
 ```powershell
 python test_console_chat.py
 ```
 
-Plain-text chat — validates your LLM provider and the knowledge-base/scenario prompt. This
-does NOT exercise the booking/lead tools (no `tools=` passed in text-mode) — use a real call
-via `python bot.py` to test the full flow.
-
-## 5. One-time Telnyx portal setup
-
-1. **Buy a number** — Portal → Numbers → Buy Numbers.
-2. **Create a TeXML Application** — Portal → Call Control → TeXML → "Add new TeXML app".
-   Leave the Voice URL blank — `bot.py` sets it automatically every run.
-3. **Assign the number** — Portal → Numbers → My Numbers → your number → Connection/App =
-   the TeXML Application from step 2.
-4. **Get the App's ID into `.env`**: `python list_texml_apps.py`, copy the `id` into
-   `TELNYX_TEXML_APP_ID`.
-
-## 6. Run it
-
+### 2. Automated Scenario Test Suite
+Run end-to-end simulated scenarios (Sales booking, Warm lead, Q&A, Escalation, Transfer):
 ```powershell
-python bot.py
+python test_scenario.py
 ```
 
-or double-click `start_bot.bat`. One command: starts `cloudflared`, updates Telnyx
-automatically, pre-warms VAD/Cartesia, starts the server. Call your number — every turn logs
-a `[LATENCY]` line.
+### 3. Audio Recording Debugger
+Inspect audio streams, sample rates, and mixer outputs:
+```powershell
+python audio_debug.py
+```
 
-## Testing each scenario
+---
 
-- **Info/support**: ask a general question about the four services.
-- **Sales**: say you want to buy a service or discuss pricing — should offer a meeting.
-- **Cross-sell**: add a row to Supabase's `customers` table with your test caller's phone
-  number and `purchased_services="AI Automation"`, then call — the bot may naturally pitch
-  AI Voice Agents at some point.
-- **Support escalation**: as the same "known customer," ask something the bot genuinely
-  can't answer — should offer a *support* meeting, not sales.
-- **Warm lead**: express real interest in a service, then decline to pick a time ("let me
-  think about it") — check the `leads` table in Supabase afterward.
+## Project Structure
 
-## Troubleshooting
+```text
+Backend-main_IH/
+├── bot.py                     # Main Pipecat voice pipeline & server entry point
+├── tools.py                   # LLM tools (check_availability, book_meeting, transfer_to_human, etc.)
+├── prompts.py                 # Clara system prompt, identity, guidelines & dynamic time injection
+├── booking_db.py              # Supabase REST client, lead capture & AI outcome classifier
+├── cal_com.py                 # Cal.com v2 REST API client for slot lookup and bookings
+├── auto_tunnel.py             # Automated Cloudflare tunnel & Telnyx webhook updater
+├── call_recorder.py           # Jitter-free bidirectional 8kHz audio capture tap
+├── email_sender.py            # Resend email client for confirmations & booking links
+├── demo_display.py            # Real-time formatted terminal UI logger
+├── latency_logger.py          # Per-turn latency breakdown logger (STT, LLM, TTS)
+├── warmup.py                  # Model & connection pre-warming
+├── innoventix_schema.sql      # Supabase database DDL schema
+├── test_console_chat.py       # Console text chat test utility
+├── test_scenario.py           # End-to-end scenario test runner
+├── requirements.txt           # Python dependencies
+├── start_bot.bat              # Windows batch launcher
+├── .env.example               # Template environment configuration
+└── README.md                  # Documentation
+```
 
-- **"An error has occurred" on the call, nothing in the terminal** → check `cloudflared` is
-  running, `python list_texml_apps.py` shows today's tunnel URL, and the number is assigned
-  to the right app.
-- **Booking fails every time** → check the Sheet is shared with the service account as
-  Editor, the Calendar is shared with the service account too (separate step, easy to miss),
-  and your Date/Time format in the Sheet matches `YYYY-MM-DD` / `H:MM AM/PM` exactly.
-- **No Meet link in the confirmation** → check the logs for "Event created but no Meet link
-  came back" — usually means `conferenceDataVersion=1` isn't reaching the API correctly, or
-  the calendar itself doesn't support auto-generated Meet links (some Workspace admin
-  policies restrict this).
-- **Cross-sell never happens** → confirm the caller's phone number in `customers` matches
-  exactly what Telnyx reports (check the logs for the `From number` line) — format
-  mismatches (e.g. missing `+`) will silently fail to match.
+---
+
+## License
+
+Proprietary — Built exclusively for **Innoventix Hub** ([innoventixhub.tech](https://innoventixhub.tech)).

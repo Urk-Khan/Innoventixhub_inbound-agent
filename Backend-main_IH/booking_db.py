@@ -20,6 +20,7 @@ SUPABASE_SERVICE_KEY must be the service-role key (bypasses Row Level Security) 
 public anon key, and never exposed outside this backend.
 """
 
+import asyncio
 import os
 
 import aiohttp
@@ -158,6 +159,41 @@ async def log_meeting(
                     logger.warning(f"Meeting log insert failed ({resp.status}): {await resp.text()}")
     except Exception as e:
         logger.warning(f"Meeting log request failed: {e}")
+async def _classify_transcript_with_ai(transcript: str) -> str:
+    """Uses LLM to classify non-meeting call outcomes with high precision."""
+    openai_key = os.getenv("OPENAI_API_KEY", "")
+    if not openai_key or not transcript.strip():
+        return ""
+
+    prompt = f"""You are an outcome classifier for an inbound AI receptionist voice agent.
+Analyze the conversation transcript and classify the outcome into EXACTLY one of these labels:
+- "warm_lead": The caller showed purchase interest, requested an email with details/rates/link, asked for a callback or quote, or is busy right now but wants follow-up, but did NOT book a live calendar slot.
+- "info_inquiry": The caller asked general questions about services, pricing, company background, website, or declined to book/said they will visit in person.
+- "transferred": The caller requested to speak to a person/agent and was transferred.
+
+Transcript:
+{transcript}
+
+Return ONLY the single word label: warm_lead, info_inquiry, or transferred."""
+
+    try:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=openai_key)
+        resp = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=os.getenv("OPENAI_MODEL", "gpt-5.4-mini"),
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_completion_tokens=10,
+            ),
+            timeout=4.0,
+        )
+        res = resp.choices[0].message.content.strip().lower().replace('"', '').replace("'", "")
+        if res in ("warm_lead", "info_inquiry", "transferred"):
+            return res
+    except Exception as e:
+        logger.debug(f"AI classification failed or timed out: {e}")
+    return ""
 
 
 async def save_call_record(
@@ -166,7 +202,8 @@ async def save_call_record(
     caller_phone: str | None,
     start_time: float,
     messages: list[dict],
-) -> None:
+    explicit_outcome: str | None = None,
+) -> bool:
     """Fire-and-forget call log: extracts transcript, classifies outcome, and inserts into
     the call_logs table. Never raises — a logging failure must never surface as a call failure.
 
@@ -176,7 +213,7 @@ async def save_call_record(
     supabase_url, supabase_key = _get_config()
     if not supabase_url or not supabase_key:
         logger.error("SUPABASE_URL or SUPABASE_SERVICE_KEY not set in .env — call not logged")
-        return
+        return False
 
     # Build a clean dialog transcript, skipping internal system injections.
     lines = []
@@ -202,27 +239,107 @@ async def save_call_record(
             lines.append(f"Agent: {content}")
 
     transcript = "\n".join(lines)
+    duration = max(1, int(__import__("time").time() - start_time))
 
-    # Auto-classify outcome from transcript keywords.
-    t_lower = transcript.lower()
-    if "meeting is confirmed" in t_lower or "booked" in t_lower or "locked that in" in t_lower:
-        outcome = "meeting_booked"
-    elif "warm lead" in t_lower or "mark_potential_lead" in t_lower or "let me think" in t_lower:
-        outcome = "warm_lead"
-    elif "transfer" in t_lower or "human" in t_lower:
-        outcome = "transferred"
-    elif len(lines) <= 2:
+    # Determine outcome with priority:
+    # 1. Explicit outcome passed by caller/tools
+    # 2. Database cross-check (did this call_id create a meeting or lead?)
+    # 3. Intelligent AI / heuristic classification (NEVER falsely assume meeting_booked)
+    outcome = explicit_outcome
+
+    # 1. Only a real meeting booked via Cal.com / meetings table is "meeting_booked"
+    if outcome != "meeting_booked" and call_id:
+        try:
+            async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+                async with session.get(
+                    f"{supabase_url}/rest/v1/meetings?call_id=eq.{call_id}&select=id",
+                    headers=_headers(supabase_key),
+                ) as m_resp:
+                    if m_resp.status == 200:
+                        m_rows = await m_resp.json()
+                        if m_rows:
+                            outcome = "meeting_booked"
+        except Exception as e:
+            logger.debug(f"Meetings check skipped: {e}")
+
+    # 2. Check if already logged as warm lead in database
+    if not outcome and call_id:
+        try:
+            async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+                async with session.get(
+                    f"{supabase_url}/rest/v1/leads?call_id=eq.{call_id}&select=id",
+                    headers=_headers(supabase_key),
+                ) as l_resp:
+                    if l_resp.status == 200:
+                        l_rows = await l_resp.json()
+                        if l_rows:
+                            outcome = "warm_lead"
+        except Exception as e:
+            logger.debug(f"Leads check skipped: {e}")
+
+    # 3. Check for dropped call (short call with minimal speech)
+    # Preserves user's frontend mapping to Customer Support
+    if not outcome and len(lines) <= 2 and duration < 25:
         outcome = "dropped_call"
-    else:
-        outcome = "info_inquiry"
 
-    duration = int(__import__("time").time() - start_time)
+    # 4. Check for live transfer
+    if not outcome and (outcome == "transferred" or explicit_outcome == "transferred"):
+        outcome = "transferred"
+
+    # 5. Intelligent classification for remaining non-meeting calls
+    # CRITICAL: NEVER default to meeting_booked here!
+    if not outcome:
+        ai_res = await _classify_transcript_with_ai(transcript)
+        if ai_res:
+            outcome = ai_res
+        else:
+            # Rule-based fallback — NEVER set meeting_booked here!
+            t_lower = transcript.lower()
+            if any(w in t_lower for w in ["send me", "email", "booking link", "busy right now", "call back", "quote", "proposal", "check with my", "think about it"]):
+                outcome = "warm_lead"
+            elif any(w in t_lower for w in ["transfer", "human", "agent", "specialist"]):
+                outcome = "transferred"
+            else:
+                outcome = "info_inquiry"
+
+    # 6. If outcome is warm_lead and no lead entry exists yet in leads table, auto-log it
+    if outcome == "warm_lead" and call_id:
+        try:
+            async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+                async with session.get(
+                    f"{supabase_url}/rest/v1/leads?call_id=eq.{call_id}&select=id",
+                    headers=_headers(supabase_key),
+                ) as l_chk:
+                    existing_leads = (await l_chk.json()) if l_chk.status == 200 else []
+            if not existing_leads:
+                service = "General Services"
+                t_lower = transcript.lower()
+                if "website" in t_lower or "web dev" in t_lower:
+                    service = "Web Development & SEO" if "seo" in t_lower else "Web Development"
+                elif "seo" in t_lower:
+                    service = "SEO"
+                elif "voice agent" in t_lower or "receptionist" in t_lower:
+                    service = "AI Voice Agents"
+                elif "automation" in t_lower:
+                    service = "AI Automation"
+                elif "content" in t_lower or "video" in t_lower:
+                    service = "Content Creation"
+
+                await create_lead(
+                    name="Caller (Interested Lead)",
+                    phone=caller_phone or "Unknown",
+                    interested_service=service,
+                    reason="Showed interest / requested follow-up during call",
+                    call_id=call_id,
+                )
+        except Exception as e:
+            logger.debug(f"Auto lead creation skipped: {e}")
 
     payload = {
         "call_id": call_id,
         "caller_phone": caller_phone,
         "duration_seconds": duration,
-        "transcript": transcript,
+        "transcript": transcript or "No transcript captured",
         "outcome": outcome,
     }
 
@@ -234,8 +351,12 @@ async def save_call_record(
                 headers=_headers(supabase_key, prefer="return=minimal"),
             ) as resp:
                 if resp.status >= 400:
-                    logger.warning(f"Call log insert failed ({resp.status}): {await resp.text()}")
+                    body = await resp.text()
+                    logger.warning(f"Call log insert failed ({resp.status}): {body}")
+                    return False
                 else:
-                    logger.info(f"Call record saved: {outcome}, {duration}s, caller={caller_phone}")
+                    logger.info(f"Call record saved: {outcome}, {duration}s, caller={caller_phone}, id={call_id}")
+                    return True
     except Exception as e:
         logger.warning(f"Call log request failed: {e}")
+        return False

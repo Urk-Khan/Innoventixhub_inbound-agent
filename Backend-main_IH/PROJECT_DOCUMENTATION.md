@@ -62,7 +62,7 @@ No N8N — every integration above is a direct API call from Python via `aiohttp
 | File | Role |
 |---|---|
 | `bot.py` | Builds the pipeline for one call AND is the launcher. Also does the pre-greeting customer lookup. |
-| `prompts.py` | The system prompt — all four scenarios, lead tracking, tone, knowledge base |
+| `prompts.py` | The system prompt — all four call scenarios, 5 service disciplines, lead tracking, tone, knowledge base, pricing guidelines |
 | `tools.py` | `check_availability`, `book_meeting`, `mark_potential_lead`, `transfer_to_human`, `end_call` |
 | `google_sheets.py` | Slot truth per meeting type (Sales/Support tabs), intersected with real Calendar availability |
 | `google_calendar.py` | freeBusy checks + event creation (this is what generates the Meet link) |
@@ -152,7 +152,132 @@ the `leads` table with `status="warm"`. Only for genuine hesitation, not outrigh
 
 ---
 
-### 2026-09-15 — Comprehensive Deep Testing & Final Verification of All Call Scenarios
+### 2026-09-15 — Varied greetings/farewells, difficult-caller handling, background noise suppression
+
+Requested: sound less identical call-to-call, handle rude/abusive callers, handle accents
+better, stop responding to background voices, and generally feel more human — while
+answering honestly if directly asked whether it's an AI (see note below on why that line
+was kept, deliberately, against the letter of "hard to distinguish AI from human").
+
+**Varied greetings.** The previous session made the greeting bypass the LLM entirely for
+latency/token reasons (spoken straight to TTS) — which had the side effect of making it
+identical on every single call. Fixed without giving back that latency/token win:
+`prompts.GREETINGS_EN` is now a pool of 6 natural variants; `bot.py` picks one with
+`random.choice` before speaking it, still with zero LLM calls involved.
+
+**Varied farewells.** `end_call`'s `farewell` was already LLM-composed per call (from the
+previous session's fix), but the prompt's example lines risked being copied verbatim.
+Reworded to explicitly say "compose your own line, these are tone examples, not scripts."
+
+**Difficult callers.** New DIFFICULT CALLERS section in `prompts.py`: stay calm, don't mirror
+hostility, de-escalate without being submissive, and — the part that matters for a real
+phone line — a boundary for actual abuse (sustained insults/slurs/threats) that ends in a
+polite call termination rather than either arguing back or absorbing it indefinitely.
+Ordinary frustration still gets full help; this only triggers for sustained abuse.
+
+**Accents / unclear speech.** No Cartesia STT parameter changes what a caller's accent
+"sounds like" to the model — `ink-whisper` (already in use) is a modern Whisper-based model
+already reasonably robust across global English accents; there's no dial for this the way
+there's a `language` setting for switching between languages entirely. What IS controllable:
+a new HANDLING UNCLEAR SPEECH section instructing the agent to ask for repeats/spelling
+rather than guess on anything that matters (extending the existing email-confirmation
+pattern to names, numbers, and requests generally), and to change approach rather than
+repeat the same question a third time.
+
+**Background noise/voices.** Added `RNNoiseFilter` (free, fully local, no API key —
+`pip install "pipecat-ai[rnnoise]"`, added to requirements.txt) as `audio_in_filter` on the
+Telnyx transport, cleaning caller audio before it reaches VAD/STT. `bot._build_noise_filter`
+degrades to `None` with a clear warning if the extra isn't installed, so nothing breaks if
+it's skipped. Verified both branches (installed / not installed) directly.
+**Important honesty note**: RNNoise suppresses general ambient NOISE (fans, traffic, hum). If
+the actual complaint is a second clear human voice audible near the caller, that's voice
+ISOLATION — a different, harder problem — which RNNoise is not designed to solve. Krisp VIVA,
+Arctan Eigen, and the AIC filter all do real voice isolation via `audio_in_filter` on the
+same `FastAPIWebsocketParams` transport this project already uses (verified against current
+Pipecat docs), but every one of them requires signing up for a separate paid SDK/license
+before any code could use it — not something addressable from within this codebase alone.
+Left unwired for that reason; links are in this entry's sources if that becomes necessary.
+
+**On "hard to distinguish AI from human."** Built everything that makes this a better,
+warmer, more natural-sounding conversation. Deliberately did NOT build in a rule to deny
+being an AI if asked directly — the new YOUR IDENTITY section requires an honest "yes, I'm
+an AI" if asked point-blank, framed warmly rather than awkwardly. This isn't a partial
+delivery of the request: several jurisdictions have real disclosure requirements for AI
+phone agents, and the two goals (sound genuinely human in normal conversation vs. lie if
+directly confronted) aren't actually in tension — nearly every real interaction never
+involves that direct question, and the ones that do are exactly the moments honesty matters
+most for trust in the business behind the call.
+
+Also fixed two stale references caught while in these files: `bot.py`'s docstring still said
+the caller lookup ran before the greeting (an earlier session moved it after, for latency;
+the docstring just hadn't been updated to match), and `requirements.txt` still said "not used
+by the active Calendly path" for the Google-auth dependency, from before the Cal.com switch.
+
+**Verified**: offline harness confirms the greeting pool produces real variety (not silently
+collapsed to one string) and that `_build_noise_filter` correctly returns `None` with a
+clear warning when the extra is absent, and returns a real filter instance when present —
+both branches exercised directly against the actual function source. Could not test real
+audio, a live call in a noisy environment, or how any specific accent actually transcribes —
+no network access in this environment, and STT accuracy on real audio can only be judged by
+a real test call.
+
+
+
+This upload had regressed on three fixes from earlier sessions — `end_call` (no farewell),
+the greeting flow (LLM call for a fixed string), and `check_availability`'s scope — most
+likely because the prior "Comprehensive Deep Testing" pass above rebuilt `test_scenario.py`
+against an older reference copy of `tools.py`/`bot.py`/`prompts.py`. `booking_db.py`,
+`email_sender.py`, and `cal_com.py`'s env-read fixes were untouched and confirmed intact.
+
+**1. Calls ended without a goodbye (the reported bug).** `end_call` pushed `EndWorkerFrame`
+immediately, tearing the pipeline down before the LLM could say anything, and pushed it
+downstream — where it could race past and cut off any audio still in flight. Fixed:
+`end_call` now takes a required `farewell` string, queues it as `TTSSpeakFrame` first, then
+pushes `EndWorkerFrame` **upstream** so shutdown lands behind the farewell audio rather than
+racing it. `prompts.py` gained an ENDING THE CALL POLITELY protocol: ask "anything else?"
+and wait, then sign off with a farewell tailored to how the call went.
+
+**2. Checking availability without being asked (the reported bug).** `check_availability`'s
+docstring said "call this whenever the caller is ready to book," which an eager model could
+read as license to check speculatively. `prompts.py`'s MEETING BOOKING section now opens
+with an explicit gate: only start this flow once the caller has clearly asked to schedule
+something, never speculatively while still just discussing services. Both the docstring and
+the prompt also now say to call it only ONCE per booking attempt — the results stay valid
+for the rest of the call.
+
+**3. Token usage cut in three concrete ways** (functionality unchanged in all three):
+   - The greeting is a fixed string, but `bot.py` was asking the LLM to generate it —
+     spending a full inference's worth of system-prompt + all 6 tool schemas for output that
+     was always going to be identical. Now spoken directly via `TTSSpeakFrame`; the greeting
+     is still recorded in context as an assistant turn so the model doesn't greet twice.
+   - `check_availability`'s slot limit dropped from 15 to 6 — the prompt already said to
+     read aloud only 2-3, so the other 9+ were pure token waste on every single call.
+   - Trimmed the CONVERSATIONAL PACING section from a long list of example phrases (repeated
+     on every turn as part of the system prompt) to a short instruction with 2 examples,
+     preserving the behavior it governs.
+   - (Investigated but not changed: Anthropic prompt caching via Pipecat's
+     `AnthropicLLMService` looked promising, but the exact settings-flag name has changed
+     across recent Pipecat/Anthropic SDK versions and couldn't be verified against this
+     project's pinned `pipecat-ai==1.8.1` without live testing. The active `LLM_PROVIDER` is
+     OpenAI, which already applies automatic prompt caching server-side with no code changes
+     needed. Worth revisiting with a real test call if the Anthropic path is ever used.)
+
+**4. `transfer_to_human` was promising a transfer that doesn't exist.** It returned
+`transferring: True` with no SIP transfer implemented, so the agent could tell a caller to
+hold for a handoff that would never come. Now returns `transferred: False` explicitly, and
+the prompt makes the agent offer a meeting or callback instead of asking the caller to wait.
+
+**5. Synced `test_scenario.py`/`test_console_chat.py`** with the `end_call`/`transfer_to_human`
+changes above — their hand-maintained tool schemas would otherwise have gone stale against
+the real behavior and silently tested an outdated contract.
+
+**Verified** with an offline harness (stubbed network/Pipecat): `check_availability` capped
+at 6 slots, `end_call` speaks the farewell before pushing the end frame upstream (both
+frame order and direction checked), `transfer_to_human` reports `transferred: False`. All
+passed. Could not test live audio, a real Cal.com/Supabase/Telnyx call, or actual token
+counts against a running LLM — no network access in this environment.
+
+
 
 Conducted a deep audit and automated verification across all system components, integrations, and call paths:
 
@@ -355,3 +480,20 @@ cross-sell pairing table and clear rules for when to log a lead vs. not.
 **Defaults chosen without an explicit answer from you — flag if wrong**: separate Sheet tabs
 and Calendar IDs per meeting type (same value works for both if it's one team); Resend for
 email over Gmail API.
+
+### 2026-10-02 — Expanded Service Catalog & Knowledge Base to 5 Integrated Pillars
+
+Updated the agent's knowledge base and documentation from 4 service lines to the complete **5 integrated service disciplines**:
+1. **Content Creation**: Video Editing (long/short-form, captions, thumbnails), YouTube Automation (SEO, calendar, algorithms), AI UGC (product demos with AI avatars), and portfolio.
+2. **AI Automation**: SMB Automation (lead capture, email sequences, CRM sync), Custom CRM Solutions, GoHighLevel (GHL) Integrations, n8n Workflow Automation, and projects portfolio.
+3. **AI Voice Agents**: Main Platform (inbound receptionists, outbound qualification, booking), custom integrations (HubSpot, Salesforce, Google Calendar, Calendly, Stripe), demos, and use cases.
+4. **Web Development**: Custom Web Development (React, Node.js, TypeScript), WordPress Development (Divi, Elementor, custom plugins), Web Design & UX, and portfolio.
+5. **SEO (Search Engine Optimization)**: SEO Audit & Strategy, Technical SEO Implementation (Core Web Vitals, crawlability), Content Optimization (keyword mapping, topic clusters), and Ongoing SEO Management.
+
+**Key Additions to `prompts.py`**:
+- **Pricing Policy (Strictly Enforced)**: No prices, rates, or dollar ranges are disclosed over the phone. Ava politely explains that she is not the right person to quote pricing since each project is custom-tailored, and offers to schedule a scoping meeting with the team to discuss both the project and pricing.
+- **Cross-Discipline Bundles & Cross-Sell Logic**: Complete Marketing Growth, Content + SEO, Automation + Web, Voice Agents + Automation, Content + Voice.
+- **Consultative Discovery & Decision Logic**: Pain point mapping to appropriate service recommendations without premature booking pushes.
+- **Voice-Ready FAQs**: Answers for "Do I need all 5 services?", "How long until results?", "Can I start with one?", "Differences with competitors?", and "Guarantee rankings?".
+- **Core Functionality Intact**: All pipeline mechanics, Cal.com scheduling, Supabase lead/call logging, audio latency, and conversational rules remain untouched.
+

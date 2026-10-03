@@ -23,5 +23,5 @@ class LatencyLogger(FrameProcessor):
         if isinstance(frame, MetricsFrame):
             for m in frame.data:
                 if isinstance(m, TTFBMetricsData):
-                    logger.info(f"[LATENCY] {m.processor} TTFB: {m.value * 1000:.0f}ms")
+                    logger.debug(f"[LATENCY] {m.processor} TTFB: {m.value * 1000:.0f}ms")
         await self.push_frame(frame, direction)

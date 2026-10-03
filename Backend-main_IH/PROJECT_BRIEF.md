@@ -5,11 +5,12 @@
 
 ## WHAT THIS IS
 
-An inbound phone-answering AI voice agent for **Innoventix Hub**, a tech-enabled production house with four core service lines:
-1. **Content Creation**
-2. **AI Automation**
-3. **AI Voice Agents**
-4. **Web Development**
+An inbound phone-answering AI voice agent for **Innoventix Hub**, a tech-enabled production house with five integrated service disciplines:
+1. **Content Creation** (Video Editing, YouTube Automation, AI UGC, Portfolio)
+2. **AI Automation** (SMB Solutions, Custom CRM, GHL Integration, n8n, Projects Portfolio)
+3. **AI Voice Agents** (Inbound & Outbound Voice AI, Custom Integrations, Demos)
+4. **Web Development** (Custom React/Node/TypeScript, WordPress, Web Design & UX)
+5. **SEO (Search Engine Optimization)** (SEO Audits & Strategy, Technical SEO, Content Optimization, Ongoing Management)
 
 When someone calls the Telnyx phone number, the bot answers, conducts a natural voice conversation, and handles four main scenarios:
 - **Scenario 1 — Info / General Inquiries**: Direct answers from the knowledge base in the prompt.

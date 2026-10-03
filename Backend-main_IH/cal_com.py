@@ -48,33 +48,12 @@ import aiohttp
 from loguru import logger
 
 CAL_API_KEY = os.getenv("CAL_API_KEY", "")
-TIMEZONE = os.getenv("TIMEZONE", "UTC")
 LOOKAHEAD_DAYS = int(os.getenv("CAL_LOOKAHEAD_DAYS", "14"))
 
 _API_BASE = "https://api.cal.com/v2"
 _SLOTS_API_VERSION = "2024-09-04"
 _BOOKINGS_API_VERSION = "2024-08-13"
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=15)
-
-# Validate timezone at import time, same reasoning as calendly.py: catch misconfiguration in
-# logs immediately rather than silently at booking time.
-try:
-    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-    ZoneInfo(TIMEZONE)
-    if TIMEZONE == "UTC":
-        import logging as _logging
-        _logging.getLogger(__name__).warning(
-            "TIMEZONE is set to UTC in .env — meeting slots will be displayed in UTC. "
-            "If your business operates in a different timezone, set e.g. TIMEZONE=Asia/Karachi "
-            "or TIMEZONE=America/New_York to show callers accurate local times."
-        )
-except Exception:
-    import logging as _logging
-    _logging.getLogger(__name__).error(
-        f"TIMEZONE='{TIMEZONE}' is not a valid IANA timezone name. "
-        "Defaulting display to UTC. Fix this in .env — see https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
-    )
-    TIMEZONE = "UTC"
 
 
 def _parse_booking_url(url: str) -> tuple[str, str]:
@@ -112,19 +91,27 @@ def _headers(api_version: str) -> dict:
     }
 
 
+def _get_timezone() -> str:
+    """Read TIMEZONE fresh from environment (defaults to Asia/Karachi)."""
+    return os.getenv("TIMEZONE", "Asia/Karachi")
+
+
 def format_display(start_time_iso: str) -> tuple[str, str]:
     """ISO datetime -> (date, time) display strings in the configured TIMEZONE, for the LLM
     to read aloud. Purely cosmetic — book_slot keys off the raw start string, not these
-    strings. Reads TIMEZONE fresh (not the module-level constant) for the same reason
-    booking_db.py now reads its config fresh — see that file's _get_config for the full
-    explanation of why a module-level `os.getenv` constant can get permanently stuck on a
-    stale default if this module is ever imported before .env is loaded."""
+    strings. Reads TIMEZONE fresh (not the module-level constant) so it is always accurate."""
     from zoneinfo import ZoneInfo
 
-    tz_name = os.getenv("TIMEZONE", "UTC")
-    dt = datetime.fromisoformat(start_time_iso.replace("Z", "+00:00")).astimezone(ZoneInfo(tz_name))
+    tz_name = _get_timezone()
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("UTC")
+
+    dt = datetime.fromisoformat(start_time_iso.replace("Z", "+00:00")).astimezone(tz)
+    date_str = dt.strftime("%A, %b %d")
     time_str = dt.strftime("%I:%M %p").lstrip("0") or dt.strftime("%I:%M %p")
-    return dt.strftime("%Y-%m-%d"), time_str
+    return date_str, time_str
 
 
 def _extract_meet_link(booking: dict) -> str | None:
@@ -142,14 +129,16 @@ def _extract_meet_link(booking: dict) -> str | None:
     return None
 
 
-async def get_open_slots(meeting_type: str, limit: int = 15) -> list[dict]:
-    """Returns up to `limit` open slots:
-    [{"start_time": "<exact ISO string>", "date": "...", "time": "..."}, ...].
-    "start_time" is what must be passed back to book_slot verbatim. "date"/"time" are just
-    for the LLM to read aloud."""
+async def get_open_slots(meeting_type: str, limit: int = 20) -> list[dict]:
+    """Returns open slots distributed across the available days of the upcoming week:
+    [{"start_time": "<exact ISO string>", "weekday": "...", "date": "...", "time": "..."}, ...].
+    "start_time" is what must be passed back to book_slot verbatim.
+    Slots are selected evenly across up to 5 available business days so the voice agent
+    has coverage for the entire week (morning, midday, afternoon) rather than bunching
+    all slots into the first day."""
     api_key = os.getenv("CAL_API_KEY", "")
     lookahead_days = int(os.getenv("CAL_LOOKAHEAD_DAYS", "14"))
-    tz_name = os.getenv("TIMEZONE", "UTC")
+    tz_name = _get_timezone()
 
     if not api_key:
         logger.error("CAL_API_KEY not set in .env")
@@ -161,8 +150,6 @@ async def get_open_slots(meeting_type: str, limit: int = 15) -> list[dict]:
         return []
 
     now = datetime.now(timezone.utc)
-    # Same 60-second buffer as calendly.py — avoids "start must be in the future" from clock
-    # skew between our server and Cal.com's.
     start = (now + timedelta(seconds=60)).isoformat().replace("+00:00", "Z")
     end = (now + timedelta(days=lookahead_days)).isoformat().replace("+00:00", "Z")
 
@@ -186,21 +173,74 @@ async def get_open_slots(meeting_type: str, limit: int = 15) -> list[dict]:
         logger.error(f"Cal.com availability request failed: {e}")
         return []
 
-    # /v2/slots groups results by date: {"data": {"2026-09-15": [{"start": "..."}], ...}}.
-    # Flatten in date order, then by time within each date.
     by_date = data.get("data", {})
-    slots = []
+    from zoneinfo import ZoneInfo
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("UTC")
+
+    # Group valid slots by date
+    days_map: dict[str, list[dict]] = {}
     for date_key in sorted(by_date.keys()):
-        for item in by_date[date_key]:
+        raw_items = by_date[date_key]
+        if not raw_items:
+            continue
+        for item in raw_items:
             start_iso = item.get("start")
             if not start_iso:
                 continue
-            date_str, time_str = format_display(start_iso)
-            slots.append({"start_time": start_iso, "date": date_str, "time": time_str})
-            if len(slots) >= limit:
-                return slots
+            dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00")).astimezone(tz)
+            day_str = dt.strftime("%A, %b %d")
+            weekday = dt.strftime("%A")
+            time_str = dt.strftime("%I:%M %p").lstrip("0") or dt.strftime("%I:%M %p")
+            days_map.setdefault(day_str, []).append({
+                "start_time": start_iso,
+                "weekday": weekday,
+                "date": day_str,
+                "time": time_str,
+            })
 
-    return slots
+    if not days_map:
+        return []
+
+    # Distribute slots across up to 5 available days so the entire week is represented
+    slots: list[dict] = []
+    max_days = min(len(days_map), 5)
+    slots_per_day = max(2, limit // max_days) if max_days > 0 else 3
+
+    for day_str, day_slots in list(days_map.items())[:max_days]:
+        if len(day_slots) <= slots_per_day:
+            slots.extend(day_slots)
+        else:
+            # Pick evenly spaced slots across the day (morning, midday, afternoon)
+            step = len(day_slots) / slots_per_day
+            indices = sorted(list(set(int(i * step) for i in range(slots_per_day))))
+            slots.extend([day_slots[i] for i in indices])
+
+        if len(slots) >= limit:
+            break
+
+    return slots[:limit] if limit and len(slots) > limit else slots
+
+
+async def _find_existing_booking(session: aiohttp.ClientSession, email: str) -> dict | None:
+    """Helper to recover from HTTP 409 Conflict when a booking was already created in Cal.com
+    (e.g., from an interrupted LLM tool call turn)."""
+    try:
+        async with session.get(
+            f"{_API_BASE}/bookings", headers=_headers(_BOOKINGS_API_VERSION)
+        ) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                bookings = data.get("data", [])
+                for b in bookings:
+                    for att in b.get("attendees", []):
+                        if att.get("email", "").lower() == email.lower():
+                            return b
+    except Exception as e:
+        logger.warning(f"Failed to query existing Cal.com bookings: {e}")
+    return None
 
 
 async def book_slot(
@@ -245,6 +285,13 @@ async def book_slot(
                 if resp.status >= 400:
                     body = await resp.text()
                     logger.error(f"Cal.com booking failed ({resp.status}): {body}")
+                    if resp.status == 409:
+                        existing = await _find_existing_booking(session, email)
+                        if existing:
+                            meet_link = _extract_meet_link(existing)
+                            event_uid = existing.get("uid")
+                            logger.info(f"Resolved 409 Conflict: existing booking found for {email} (uid={event_uid})")
+                            return {"success": True, "meet_link": meet_link, "event_uri": event_uid, "error": None}
                     return {"success": False, "meet_link": None, "event_uri": None, "error": "booking_failed"}
                 data = await resp.json()
     except Exception as e:
