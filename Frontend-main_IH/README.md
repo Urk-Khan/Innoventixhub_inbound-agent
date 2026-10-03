@@ -1,4 +1,4 @@
-# Innoventix Console — Management & Analytics Dashboard
+# Innoventix Dashboard — Management & Analytics Console
 
 A modern, high-performance operational dashboard for the **Innoventix Hub AI Inbound Voice Agent**. The console provides real-time visibility into incoming telephony calls, booked calendar meetings, warm lead qualification pipelines, and customer support inquiries — powered directly by Supabase.
 
@@ -8,10 +8,17 @@ Built with **Next.js 14 (App Router)**, **TypeScript**, and **Vanilla CSS Module
 
 ## 🌟 Key Features
 
-### 1. Executive Overview (`/`)
-- **Rolling 24-Hour Metrics**: Live KPI cards displaying **Total Calls**, **Meetings Booked**, **Leads Captured**, and **Customer Support** inquiries.
-- **Hourly Activity Histogram**: Visual 24-hour distribution of call volume bucketed by hour.
-- **Recent Activity Feed**: Instant snapshot of the latest calls and customer interactions.
+### 1. Operations Dashboard (`/`)
+- **Executive KPI Cards**: Rolling 24-hour live metrics for **Total Calls**, **Meetings Booked**, **Leads Captured**, and **Customer Support** inquiries.
+- **Dual Visual Analytics (50/50 Grid)**:
+  - **Call Volume Histogram**: 24-hour visual activity distribution bucketed by hour.
+  - **Call Outcomes Pie / Donut Chart**: Real-time proportional breakdown of all call outcomes with semantic colors:
+    - 🟢 **Meetings booked** (`#3fb68a` — Teal)
+    - 🟡 **Warm leads** (`#e8a33d` — Amber)
+    - 🔵 **Customer support** (`#3b82f6` — Blue)
+    - 🔷 **Info inquiry** (`#0ea5e9` — Sky Blue)
+    - 🟣 **Transferred** (`#8b5cf6` — Purple)
+- **Recent Activity Feed**: Instant snapshot of the latest calls and customer interactions with relative timestamps.
 
 ### 2. Call Logs & Transcripts (`/calls`)
 - **Full Call History**: Detailed audit trail of all inbound calls processed by the voice agent.
@@ -20,13 +27,15 @@ Built with **Next.js 14 (App Router)**, **TypeScript**, and **Vanilla CSS Module
 
 ### 3. Meetings & Bookings (`/bookings`)
 - **Automated Bookings**: Synced directly with appointments scheduled through Google Calendar and Cal.com via the voice agent.
+- **Optimized Scheduling Format**: Clear time-first ordering (`4:00 PM Monday, Oct 05`) for immediate readability.
 - **Direct Meet Access**: One-click Google Meet join links and attendee contact information.
 
 ### 4. Leads Management CRM (`/leads`)
 - **Warm Lead Pipeline**: Captures callers who showed purchase intent without immediate booking.
 - **Status Workflow**: Interactive state management (`warm` ➔ `contacted` ➔ `converted` ➔ `cold`) using Next.js Server Actions.
 
-### 5. Edge Security & Authentication (`/login`)
+### 5. Brand Identity & Edge Security (`/login`)
+- **Zero-Delay Animated Brand Identity**: Integrated horizontal white Innoventix Hub animated logo, cropped and optimized to display immediately from 0ms without blank delays or layout shifts.
 - **Edge Middleware Protection**: Global route gating via Next.js Edge Middleware (`middleware.ts`).
 - **Cryptographic Session Signing**: HMAC-SHA256 signed session cookies via the Web Crypto API (`lib/auth.ts`).
 - **Zero Client-Side Secret Leakage**: Supabase service keys are strictly isolated to Server Components and Server Actions.
@@ -48,35 +57,40 @@ Built with **Next.js 14 (App Router)**, **TypeScript**, and **Vanilla CSS Module
 ```
 Frontend-main_IH/
 ├── app/
-│   ├── api/logout/route.ts       # Secure session termination handler
-│   ├── bookings/page.tsx         # Scheduled meetings & join links view
-│   ├── calls/page.tsx            # Call log table with transcript viewer
+│   ├── api/logout/route.ts            # Secure session termination handler
+│   ├── bookings/page.tsx              # Scheduled meetings (4:00 PM Day, Date) & join links
+│   ├── calls/page.tsx                 # Call log table with transcript viewer
 │   ├── leads/
-│   │   ├── actions.ts            # Server Action for lead status mutation
-│   │   └── page.tsx              # Leads management CRM view
+│   │   ├── actions.ts                 # Server Action for lead status mutation
+│   │   └── page.tsx                   # Leads management CRM view
 │   ├── login/
-│   │   ├── actions.ts            # Session verification & cookie generation
-│   │   ├── login.module.css      # Login page styling
-│   │   └── page.tsx              # Admin authentication screen
-│   ├── globals.css               # Global theme tokens, typography, and resets
-│   ├── layout.tsx                # Master dashboard shell with collapsible sidebar
-│   ├── page.module.css           # Overview dashboard styling
-│   └── page.tsx                  # Overview KPI analytics & hourly charts
+│   │   ├── actions.ts                 # Session verification & cookie generation
+│   │   ├── login.module.css           # Login page styling
+│   │   └── page.tsx                   # Admin authentication screen
+│   ├── globals.css                    # Global theme tokens, typography, and resets
+│   ├── layout.tsx                     # Master dashboard shell with collapsible sidebar
+│   ├── page.module.css                # Dashboard styling with 50/50 dual analytics grid
+│   └── page.tsx                       # Dashboard KPI analytics, volume & outcome charts
 ├── components/
-│   ├── CallsTable.tsx            # Filterable & searchable call records
-│   ├── HourlyChart.tsx           # 24-hour visual activity histogram
-│   ├── LeadsTable.tsx            # Interactive lead status update table
-│   ├── Sidebar.tsx               # Collapsible navigation drawer
-│   └── StatusBadge.tsx           # Semantic color-coded status badges
+│   ├── CallsTable.tsx                 # Filterable & searchable call records
+│   ├── HourlyChart.tsx                # 24-hour visual activity histogram
+│   ├── OutcomePieChart.tsx            # Interactive Donut/Pie Chart for call outcomes
+│   ├── OutcomePieChart.module.css     # Donut chart SVG & legend styling
+│   ├── LeadsTable.tsx                 # Interactive lead status update table
+│   ├── Sidebar.tsx                    # Collapsible navigation drawer with animated logo
+│   └── StatusBadge.tsx                # Semantic color-coded status badges
 ├── lib/
-│   ├── auth.ts                   # Web Crypto HMAC-SHA256 cookie session engine
-│   ├── supabase.ts               # Authenticated server-side Supabase client
-│   └── types.ts                  # TypeScript schema definitions matching Supabase
-├── public/                       # Static public assets
-├── middleware.ts                 # Edge-level authentication route protection
-├── next.config.mjs               # Next.js configuration
-├── package.json                  # Application metadata and dependencies
-└── tsconfig.json                 # TypeScript compiler configuration
+│   ├── auth.ts                        # Web Crypto HMAC-SHA256 cookie session engine
+│   ├── supabase.ts                    # Authenticated server-side Supabase client
+│   └── types.ts                       # TypeScript schema definitions matching Supabase
+├── public/
+│   ├── innoventix-logo.gif            # Optimized horizontal white animated logo
+│   └── logo.gif                       # Fallback brand asset
+├── middleware.ts                      # Edge-level authentication route protection
+├── next.config.mjs                    # Next.js configuration
+├── package.json                       # Application metadata and dependencies
+├── package-lock.json                  # Deterministic dependency lockfile
+└── tsconfig.json                      # TypeScript compiler configuration
 ```
 
 ---

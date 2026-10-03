@@ -57,13 +57,14 @@ The core Python voice agent powered by **Pipecat 1.8.1**:
 
 ---
 
-### 2. [Management Console & Analytics (`Frontend-main_IH/`)](./Frontend-main_IH)
+### 2. [Management Dashboard & Analytics (`Frontend-main_IH/`)](./Frontend-main_IH)
 The administrative console built with **Next.js 14 (App Router)** and **TypeScript**:
-- **Executive Overview (`/`):** Rolling 24-hour KPI summaries for total calls, meetings booked, warm leads, and customer support queries, alongside an hourly activity histogram.
+- **Operations Dashboard (`/`):** Rolling 24-hour KPI summaries for total calls, meetings booked, warm leads, and customer support queries.
+- **50/50 Dual Analytics Grid:** Side-by-side **Call Volume** hourly histogram and interactive **Call Outcomes** Donut/Pie Chart with semantic color coding.
 - **Call Logs & Transcripts (`/calls`):** Searchable call archive with filterable outcome badges and full conversational transcript inspection.
-- **Bookings Viewer (`/bookings`):** Audit trail of all scheduled consultations with direct Google Meet join links.
+- **Bookings Viewer (`/bookings`):** Chronological audit trail of all scheduled consultations (`4:00 PM Monday, Oct 05`) with direct Google Meet join links.
 - **Warm Leads CRM (`/leads`):** Pipeline management for warm leads captured during calls (`warm` ➔ `contacted` ➔ `converted` ➔ `cold`) using Next.js Server Actions.
-- **Edge Authentication (`/login`):** Edge Middleware route protection and HMAC-SHA256 cryptographically signed session cookies via Web Crypto.
+- **Brand Identity & Edge Security (`/login`):** Zero-delay horizontal white animated Innoventix Hub logo, Edge Middleware protection, and HMAC-SHA256 cryptographically signed session cookies.
 
 👉 See [`Frontend-main_IH/README.md`](./Frontend-main_IH/README.md) for dashboard setup and deployment instructions.
 
