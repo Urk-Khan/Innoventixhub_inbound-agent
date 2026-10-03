@@ -1,6 +1,13 @@
-# Innoventix Hub — Inbound AI Voice Agent System
+# Innoventix Hub — Inbound AI Voice Agent System & Management Platform
 
-A production-grade, end-to-end inbound voice agent system and management console built for **Innoventix Hub** ([innoventixhub.tech](https://innoventixhub.tech)).
+[![Next.js 14](https://img.shields.io/badge/Next.js-14.2-black?style=flat&logo=next.js)](https://nextjs.org/)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Supabase](https://img.shields.io/badge/Supabase-Database-3ECF8E?style=flat&logo=supabase&logoColor=white)](https://supabase.com/)
+[![Telnyx](https://img.shields.io/badge/Telnyx-TeXML_Voice-00E599?style=flat)](https://telnyx.com/)
+[![Cartesia](https://img.shields.io/badge/Cartesia-Ultra_Low_Latency_Voice-7C3AED?style=flat)](https://cartesia.ai/)
+
+A production-grade, end-to-end inbound voice automation platform and management console built for **Innoventix Hub** ([innoventixhub.tech](https://innoventixhub.tech)).
 
 This repository contains both the real-time AI voice receptionist backend and the administrative dashboard frontend:
 
@@ -11,97 +18,90 @@ Innoventixhub_inbound-agent/
 └── README.md             # Monorepo documentation
 ```
 
+### 🌿 Git Branch Structure
+- **`main`**: Production release hosting the verified architecture (`Backend-main_IH/` and `Frontend-main_IH/`).
+- **`test`**: Testing and staging environment (`Backend-test_IH/` and `Frontend-test_IH/`).
+
 ---
 
-## Architecture & Subsystems
+## ⚡ System Architecture & Call Flow
 
-```
-                               ┌─────────────────────────────────────────┐
-                               │           Inbound Caller                │
-                               │        (+18555010702 / Telnyx)          │
-                               └────────────────────┬────────────────────┘
-                                                    │
-                                                    ▼
-                               ┌─────────────────────────────────────────┐
-                               │   Backend-main_IH (Python Pipecat)      │
-                               │   • Cartesia Real-Time STT & TTS        │
-                               │   • OpenAI / Anthropic LLM Reasoning    │
-                               │   • Telnyx Live Call Transfer Bridge    │
-                               │   • Cal.com Slot Checking & Booking     │
-                               │   • Resend Confirmation Emails          │
-                               └────────────────────┬────────────────────┘
-                                                    │
-                                                    ▼
-                               ┌─────────────────────────────────────────┐
-                               │         Supabase Cloud Database         │
-                               │   • call_logs  • leads  • meetings      │
-                               └────────────────────┬────────────────────┘
-                                                    │
-                                                    ▼
-                               ┌─────────────────────────────────────────┐
-                               │   Frontend-main_IH (Next.js Dashboard)  │
-                               │   • Live Call Transcripts & Filters     │
-                               │   • Warm Leads Pipeline Management      │
-                               │   • Meeting Audit Logs & Metrics        │
-                               └─────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    Caller[Inbound Caller<br/>+18555010702] -->|Phone Call| Telnyx[Telnyx TeXML Voice]
+    Telnyx <-->|WebSocket Audio| Bot[Pipecat AI Agent<br/>Backend-main_IH]
+    Bot <--> Cartesia[Cartesia STT & TTS]
+    Bot <--> LLM[OpenAI / Anthropic LLM]
+    Bot -->|Live Transfer| Human[Human Specialist<br/>+19177954404]
+    Bot -->|Log Calls & Leads| DB[(Supabase DB)]
+    Bot -->|Schedule Consultations| Cal[Cal.com / Google Meet]
+    Bot -->|Email Confirmations| Email[Resend API]
+    DB <-->|Live Operational Data| Dashboard[Innoventix Console<br/>Frontend-main_IH]
+    Admin[Team Admin] -->|Edge Secure Access| Dashboard
 ```
 
 ---
 
-## Modules
+## 📦 Subsystems & Modules
 
-### 1. [Backend Service (`Backend-main_IH`)](./Backend-main_IH)
+### 1. [Inbound Voice Agent (`Backend-main_IH/`)](./Backend-main_IH)
 The core Python voice agent powered by **Pipecat 1.8.1**:
-- **Sub-Second Telephony Pipeline:** Built on Telnyx WebSockets, Cartesia Ink-Whisper STT and Sonic TTS with Silero VAD.
-- **Smart Receptionist ("Clara"):** Answers inquiries on AI Automation, Web Dev, Mobile Apps, and SEO.
-- **Cal.com Integration:** Live calendar availability checking and meeting scheduling with auto-generated Google Meet links.
-- **Live Human Transfer:** Immediate call bridging to a human specialist (`+19177954404`) via Telnyx Call Control API.
-- **AI Outcome Classifier:** High-precision call classification (`meeting_booked`, `warm_lead`, `info_inquiry`, `transferred`, `dropped_call`).
-- **Automated Cloudflare Tunneling:** One-click startup with dynamic webhook registration (`auto_tunnel.py`).
+- **Sub-Second Telephony Pipeline:** Telnyx WebSockets, Cartesia Ink-Whisper STT, and Sonic TTS with Silero VAD.
+- **Smart AI Receptionist ("Clara"):** Answers inquiries across AI Automation, Web Development, Mobile Apps, and SEO.
+- **Cal.com & Google Meet Integration:** Live slot availability checking and meeting bookings with automated Resend email confirmations.
+- **Live Human Transfer Bridge:** Instant call bridging to a human specialist (`+19177954404`) via Telnyx Call Control API.
+- **High-Precision AI Outcome Classifier:** Classifies calls into `meeting_booked`, `warm_lead`, `info_inquiry`, `transferred`, and `dropped_call` directly into Supabase.
+- **Automated Cloudflare Tunneling:** One-click startup with automatic TeXML webhook registration (`auto_tunnel.py`).
 
-👉 See [`Backend-main_IH/README.md`](./Backend-main_IH/README.md) for installation and runtime instructions.
+👉 See [`Backend-main_IH/README.md`](./Backend-main_IH/README.md) and [`Backend-main_IH/PROJECT_DOCUMENTATION.md`](./Backend-main_IH/PROJECT_DOCUMENTATION.md) for full backend documentation.
 
 ---
 
-### 2. [Frontend Dashboard (`Frontend-main_IH`)](./Frontend-main_IH)
+### 2. [Management Console & Analytics (`Frontend-main_IH/`)](./Frontend-main_IH)
 The administrative console built with **Next.js 14 (App Router)** and **TypeScript**:
-- **Call Analytics:** Rolling 24-hour call metrics, outcome distributions, and searchable call logs with full conversational transcripts.
-- **Leads Manager:** Pipeline management for warm leads captured by Clara (status updates: warm, contacted, converted, cold).
-- **Bookings Viewer:** Audit trail of all Cal.com scheduled consultations with direct meeting links.
-- **Authentication:** Secure cookie-based password gate protecting caller data and transcripts.
+- **Executive Overview (`/`):** Rolling 24-hour KPI summaries for total calls, meetings booked, warm leads, and customer support queries, alongside an hourly activity histogram.
+- **Call Logs & Transcripts (`/calls`):** Searchable call archive with filterable outcome badges and full conversational transcript inspection.
+- **Bookings Viewer (`/bookings`):** Audit trail of all scheduled consultations with direct Google Meet join links.
+- **Warm Leads CRM (`/leads`):** Pipeline management for warm leads captured during calls (`warm` ➔ `contacted` ➔ `converted` ➔ `cold`) using Next.js Server Actions.
+- **Edge Authentication (`/login`):** Edge Middleware route protection and HMAC-SHA256 cryptographically signed session cookies via Web Crypto.
 
 👉 See [`Frontend-main_IH/README.md`](./Frontend-main_IH/README.md) for dashboard setup and deployment instructions.
 
 ---
 
-## Quick Start
+## 🚀 Quick Start Guide
 
 ### Starting the Voice Agent Backend
 ```powershell
 cd Backend-main_IH
 python -m venv venv
 .\venv\Scripts\Activate.ps1
+pip install --upgrade pip
 pip install -r requirements.txt
-Copy-Item .env.example .env   # Configure API keys
+Copy-Item .env.example .env   # Configure Telnyx, Cartesia, LLM, and Supabase credentials
 python bot.py
 ```
 
-### Starting the Management Dashboard
+### Starting the Management Console
 ```powershell
 cd Frontend-main_IH
 npm install
-cp .env.local.example .env.local   # Configure Supabase credentials
+Copy-Item .env.local.example .env.local   # Configure Supabase credentials and passwords
 npm run dev
 ```
 
+Visit [http://localhost:3000](http://localhost:3000) to access the console.
+
 ---
 
-## Security & Best Practices
+## 🔒 Security Best Practices
 - Never commit active `.env` or `.env.local` files containing secrets.
 - Audio recordings (`*.wav`) and raw runtime logs are excluded via `.gitignore`.
 - Telephony webhooks and API routes use validated endpoints.
+- Client applications never receive Supabase service role keys; database access is mediated strictly through server components and server actions.
 
 ---
 
-## License
-Proprietary — Developed for **Innoventix Hub** ([innoventixhub.tech](https://innoventixhub.tech)).
+## 📄 License & Maintainers
+Developed for **Innoventix Hub** ([innoventixhub.tech](https://innoventixhub.tech)).
+For internal and authorized partner access only.

@@ -74,7 +74,7 @@ export async function verifySessionToken(token: string | undefined): Promise<boo
     return await crypto.subtle.verify(
       "HMAC",
       key,
-      signatureBytes,
+      signatureBytes as unknown as BufferSource,
       new TextEncoder().encode(issuedAt)
     );
   } catch {

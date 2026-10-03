@@ -7,7 +7,7 @@ const CALL_OUTCOME_TONE: Record<string, Tone> = {
   warm_lead: "amber",
   info_inquiry: "blue",
   transferred: "blue",
-  dropped_call: "red",
+  dropped_call: "blue",
 };
 
 const LEAD_STATUS_TONE: Record<string, Tone> = {
@@ -18,6 +18,7 @@ const LEAD_STATUS_TONE: Record<string, Tone> = {
 };
 
 function label(value: string): string {
+  if (value === "dropped_call") return "customer support";
   return value.replace(/_/g, " ");
 }
 

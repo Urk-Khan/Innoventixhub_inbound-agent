@@ -44,7 +44,7 @@ export default async function OverviewPage() {
   const recentCalls = calls.filter((c) => new Date(c.created_at).getTime() > cutoff);
   const recentMeetings = meetings.filter((m) => new Date(m.created_at).getTime() > cutoff);
   const recentLeads = leads.filter((l) => new Date(l.created_at).getTime() > cutoff);
-  const dropped = recentCalls.filter((c) => c.outcome === "dropped_call");
+  const customerSupport = recentCalls.filter((c) => c.outcome === "dropped_call");
 
   // Rolling 24h histogram, bucketed by hour-old (23 = oldest, 0 = most recent), then reversed
   // for left-to-right = oldest-to-newest display.
@@ -71,7 +71,7 @@ export default async function OverviewPage() {
       <div className={styles.statRow}>
         <div className={styles.stat}>
           <div className={styles.statValue}>{recentCalls.length}</div>
-          <div className={styles.statLabel}>Calls</div>
+          <div className={styles.statLabel}>Total calls</div>
         </div>
         <div className={styles.statDivider} />
         <div className={styles.stat}>
@@ -89,13 +89,10 @@ export default async function OverviewPage() {
         </div>
         <div className={styles.statDivider} />
         <div className={styles.stat}>
-          <div
-            className={styles.statValue}
-            style={{ color: dropped.length > 0 ? "var(--red)" : undefined }}
-          >
-            {dropped.length}
+          <div className={styles.statValue} style={{ color: "var(--blue)" }}>
+            {customerSupport.length}
           </div>
-          <div className={styles.statLabel}>Dropped calls</div>
+          <div className={styles.statLabel}>Customer support</div>
         </div>
       </div>
 

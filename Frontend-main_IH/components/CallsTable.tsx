@@ -11,7 +11,7 @@ const OUTCOMES = [
   { value: "warm_lead", label: "Warm lead" },
   { value: "info_inquiry", label: "Info inquiry" },
   { value: "transferred", label: "Transferred" },
-  { value: "dropped_call", label: "Dropped call" },
+  { value: "dropped_call", label: "Customer support" },
 ];
 
 function formatDuration(seconds: number | null): string {

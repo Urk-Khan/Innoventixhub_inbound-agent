@@ -1,72 +1,152 @@
-# Innoventix Console
+# Innoventix Console — Management & Analytics Dashboard
 
-A read-mostly admin dashboard for the Innoventix Hub voice agent — calls, bookings, and
-leads, pulled live from the same Supabase project the voice agent (`booking_db.py`) writes
-to. Built with Next.js 14 (App Router) and TypeScript.
+A modern, high-performance operational dashboard for the **Innoventix Hub AI Inbound Voice Agent**. The console provides real-time visibility into incoming telephony calls, booked calendar meetings, warm lead qualification pipelines, and customer support inquiries — powered directly by Supabase.
 
-## What it shows
+Built with **Next.js 14 (App Router)**, **TypeScript**, and **Vanilla CSS Modules**.
 
-- **Overview** — rolling 24-hour call volume, meetings booked, leads captured, dropped
-  calls, and a recent-calls list.
-- **Calls** — every call log, searchable by phone number, filterable by outcome, with
-  expandable transcripts.
-- **Bookings** — every meeting booked through the agent, with a link to join.
-- **Leads** — callers who showed interest without booking. The one write this dashboard
-  performs: updating a lead's status (warm / contacted / converted / cold) as your team
-  works through them.
+---
 
-## Setup
+## 🌟 Key Features
 
-1. **Install dependencies:**
-   ```
-   npm install
-   ```
+### 1. Executive Overview (`/`)
+- **Rolling 24-Hour Metrics**: Live KPI cards displaying **Total Calls**, **Meetings Booked**, **Leads Captured**, and **Customer Support** inquiries.
+- **Hourly Activity Histogram**: Visual 24-hour distribution of call volume bucketed by hour.
+- **Recent Activity Feed**: Instant snapshot of the latest calls and customer interactions.
 
-2. **Copy the env file and fill it in:**
-   ```
-   cp .env.local.example .env.local
-   ```
-   - `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` — same values as the voice agent's own `.env`.
-   - `ADMIN_PASSWORD` — a password for accessing this dashboard. There's no per-user login,
-     just one shared password, since this is an internal tool. Don't reuse a personal
-     password here.
-   - `SESSION_SECRET` — a random string used to sign the login cookie. Generate one with:
-     ```
-     openssl rand -hex 32
-     ```
+### 2. Call Logs & Transcripts (`/calls`)
+- **Full Call History**: Detailed audit trail of all inbound calls processed by the voice agent.
+- **Search & Filter**: Real-time telephone number search and outcome filtering (`meeting_booked`, `warm_lead`, `info_inquiry`, `transferred`, `dropped_call` / customer support).
+- **Expandable Transcripts**: In-depth conversational transcript inspection with formatted timestamps, caller responses, and agent responses.
 
-3. **Run it:**
-   ```
-   npm run dev
-   ```
-   Visit `http://localhost:3000` — you'll be redirected to `/login` first.
+### 3. Meetings & Bookings (`/bookings`)
+- **Automated Bookings**: Synced directly with appointments scheduled through Google Calendar and Cal.com via the voice agent.
+- **Direct Meet Access**: One-click Google Meet join links and attendee contact information.
 
-## Security notes
+### 4. Leads Management CRM (`/leads`)
+- **Warm Lead Pipeline**: Captures callers who showed purchase intent without immediate booking.
+- **Status Workflow**: Interactive state management (`warm` ➔ `contacted` ➔ `converted` ➔ `cold`) using Next.js Server Actions.
 
-- `SUPABASE_SERVICE_KEY` bypasses Row Level Security and is only ever read server-side
-  (Server Components and Server Actions) — it's never sent to the browser. Don't rename any
-  `.env.local` variable with a `NEXT_PUBLIC_` prefix, which would bundle it into client-side
-  JS.
-- This dashboard shows real customer data — names, phone numbers, emails, call transcripts.
-  The password gate (`middleware.ts`) is intentionally simple (one shared password, no user
-  accounts) — appropriate for a small internal team, not for a public-facing deployment.
-  If you need per-user accounts or audit logging of who viewed what, that's a bigger change
-  than this dashboard currently makes.
-- The session cookie is `httpOnly` and signed (HMAC-SHA256 via `SESSION_SECRET`), so it
-  can't be read or forged by client-side JS or by guessing.
+### 5. Edge Security & Authentication (`/login`)
+- **Edge Middleware Protection**: Global route gating via Next.js Edge Middleware (`middleware.ts`).
+- **Cryptographic Session Signing**: HMAC-SHA256 signed session cookies via the Web Crypto API (`lib/auth.ts`).
+- **Zero Client-Side Secret Leakage**: Supabase service keys are strictly isolated to Server Components and Server Actions.
 
-## Deploying
+---
 
-Works on Vercel or any Node hosting that supports Next.js 14. Set the same four
-`.env.local` variables as environment variables in your hosting provider — don't commit
-`.env.local` to version control (it's already in `.gitignore`).
+## 🏗️ Architecture & Tech Stack
 
-## Extending
+- **Framework**: [Next.js 14](https://nextjs.org/) (App Router, Server Components, Server Actions)
+- **Language**: [TypeScript](https://www.typescriptlang.org/) (Strict mode, full type-safety)
+- **Styling**: Vanilla CSS Modules (Zero runtime CSS-in-JS overhead, clean custom design tokens)
+- **Database**: [Supabase](https://supabase.com/) (PostgreSQL client via direct REST/PostgREST server queries)
+- **Runtime**: Node.js & Edge Runtime compatible
 
-- `lib/types.ts` mirrors `innoventix_schema.sql` from the voice agent project — if that
-  schema changes, update this file to match.
-- `lib/supabase.ts` is the only place that talks to Supabase — add new query functions
-  there rather than calling `fetch` directly from a page.
-- Each page fetches its own data server-side (`export const dynamic = "force-dynamic"`
-  disables caching, since this is live operational data, not content that should be
-  statically generated).
+---
+
+## 📁 Project Structure
+
+```
+Frontend-main_IH/
+├── app/
+│   ├── api/logout/route.ts       # Secure session termination handler
+│   ├── bookings/page.tsx         # Scheduled meetings & join links view
+│   ├── calls/page.tsx            # Call log table with transcript viewer
+│   ├── leads/
+│   │   ├── actions.ts            # Server Action for lead status mutation
+│   │   └── page.tsx              # Leads management CRM view
+│   ├── login/
+│   │   ├── actions.ts            # Session verification & cookie generation
+│   │   ├── login.module.css      # Login page styling
+│   │   └── page.tsx              # Admin authentication screen
+│   ├── globals.css               # Global theme tokens, typography, and resets
+│   ├── layout.tsx                # Master dashboard shell with collapsible sidebar
+│   ├── page.module.css           # Overview dashboard styling
+│   └── page.tsx                  # Overview KPI analytics & hourly charts
+├── components/
+│   ├── CallsTable.tsx            # Filterable & searchable call records
+│   ├── HourlyChart.tsx           # 24-hour visual activity histogram
+│   ├── LeadsTable.tsx            # Interactive lead status update table
+│   ├── Sidebar.tsx               # Collapsible navigation drawer
+│   └── StatusBadge.tsx           # Semantic color-coded status badges
+├── lib/
+│   ├── auth.ts                   # Web Crypto HMAC-SHA256 cookie session engine
+│   ├── supabase.ts               # Authenticated server-side Supabase client
+│   └── types.ts                  # TypeScript schema definitions matching Supabase
+├── public/                       # Static public assets
+├── middleware.ts                 # Edge-level authentication route protection
+├── next.config.mjs               # Next.js configuration
+├── package.json                  # Application metadata and dependencies
+└── tsconfig.json                 # TypeScript compiler configuration
+```
+
+---
+
+## 🚀 Getting Started
+
+### 1. Prerequisites
+- Node.js 18.17+ or 20+
+- npm or yarn
+
+### 2. Installation
+Clone the repository and install dependencies:
+```bash
+npm install
+```
+
+### 3. Environment Configuration
+Copy `.env.local.example` to `.env.local`:
+```bash
+cp .env.local.example .env.local
+```
+
+Fill in the required configuration variables:
+
+| Variable | Description | Source |
+| :--- | :--- | :--- |
+| `SUPABASE_URL` | Supabase Project URL (`https://xyz.supabase.co`) | Supabase Dashboard → Settings → API |
+| `SUPABASE_SERVICE_KEY` | Service Role secret key (bypasses RLS for admin queries) | Supabase Dashboard → Settings → API |
+| `ADMIN_PASSWORD` | Shared administrator password for console access | Internal team secret |
+| `SESSION_SECRET` | 32-byte cryptographic secret for HMAC-SHA256 cookie signing | Generate with `openssl rand -hex 32` |
+
+> [!CAUTION]
+> Never prefix `SUPABASE_SERVICE_KEY` with `NEXT_PUBLIC_`. This key must remain strictly server-side to protect customer data.
+
+### 4. Running the Development Server
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) in your browser. You will be automatically redirected to `/login` to authenticate.
+
+### 5. Production Build
+```bash
+npm run build
+npm run start
+```
+
+---
+
+## 🔒 Security Architecture
+
+1. **Edge-Level Route Gating**: `middleware.ts` intercepts all requests before any page or API route executes, verifying the presence and signature of the session cookie.
+2. **Tamper-Proof Sessions**: The session cookie (`innoventix_session`) contains `issuedAt.signature`. The signature is calculated using HMAC-SHA256 over `issuedAt` with `SESSION_SECRET`.
+3. **Data Protection**: Sensitive customer information (caller names, phone numbers, transcripts) is strictly rendered through Next.js Server Components without exposing raw database credentials to the client browser.
+
+---
+
+## 🔄 Database Synchronization
+
+The data model defined in `lib/types.ts` directly mirrors the database tables provisioned in the backend's `innoventix_schema.sql`:
+- **`calls`**: Audit logs, caller phone numbers, call durations, and conversational outcomes.
+- **`meetings`**: Scheduled calendar entries, meeting links, and attendee details.
+- **`leads`**: Cold/warm prospective client records captured during voice agent interactions.
+- **`customers`**: Existing customer profiles used for voice agent cross-selling logic.
+
+---
+
+## 🌐 Deployment
+
+The application is fully optimized for one-click deployment to **Vercel**, **AWS Amplify**, or any containerized Docker environment:
+1. Link your Git repository to your deployment provider.
+2. Configure the 4 environment variables (`SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `ADMIN_PASSWORD`, `SESSION_SECRET`).
+3. Deploy! Next.js 14 App Router takes care of streaming server-rendered pages and dynamic routes automatically.
