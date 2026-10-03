@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import styles from "./Sidebar.module.css";
 
@@ -16,10 +17,17 @@ export default function Sidebar() {
 
   return (
     <aside className={styles.sidebar}>
-      <div className={styles.brand}>
-        <span className={styles.brandDot} />
-        <span className={styles.brandName}>Innoventix</span>
-      </div>
+      <Link href="/" className={styles.brand} aria-label="Innoventix Hub">
+        <Image
+          src="/innoventix-logo.gif"
+          alt="Innoventix Hub"
+          width={180}
+          height={68}
+          priority
+          unoptimized
+          className={styles.brandLogo}
+        />
+      </Link>
 
       <nav className={styles.nav}>
         {NAV.map((item) => {

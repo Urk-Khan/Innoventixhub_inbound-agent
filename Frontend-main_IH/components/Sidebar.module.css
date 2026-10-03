@@ -12,24 +12,25 @@
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 8px;
-  margin-bottom: 32px;
+  justify-content: flex-start;
+  padding: 4px 6px;
+  margin-bottom: 24px;
+  text-decoration: none;
+  border-radius: 8px;
+  transition: opacity 0.2s ease, background 0.2s ease;
 }
 
-.brandDot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--amber);
-  box-shadow: 0 0 0 3px var(--amber-dim);
-  flex-shrink: 0;
+.brand:hover {
+  background: rgba(255, 255, 255, 0.03);
 }
 
-.brandName {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 15px;
+.brandLogo {
+  width: 100%;
+  max-width: 175px;
+  height: auto;
+  display: block;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.25));
 }
 
 .nav {
