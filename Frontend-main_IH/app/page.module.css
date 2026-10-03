@@ -40,9 +40,23 @@
   background: var(--border);
 }
 
+.chartsRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 32px;
+}
+
+@media (max-width: 960px) {
+  .chartsRow {
+    grid-template-columns: 1fr;
+  }
+}
+
 .chartPanel {
   padding: 20px 24px 16px;
-  margin-bottom: 32px;
+  display: flex;
+  flex-direction: column;
 }
 
 .sectionTitle {

@@ -53,7 +53,7 @@ export default async function BookingsPage() {
                   </td>
                   <td className="muted">{m.topic || "—"}</td>
                   <td className="mono">
-                    {m.date || "—"} {m.time || ""}
+                    {m.time && m.date ? `${m.time} ${m.date}` : m.time || m.date || "—"}
                   </td>
                   <td className="muted">
                     <div>{m.email || "—"}</div>

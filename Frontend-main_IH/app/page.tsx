@@ -3,6 +3,7 @@ import { fetchRows } from "@/lib/supabase";
 import { CallLog, Lead, Meeting } from "@/lib/types";
 import { CallOutcomeBadge } from "@/components/StatusBadge";
 import HourlyChart from "@/components/HourlyChart";
+import OutcomePieChart from "@/components/OutcomePieChart";
 import styles from "./page.module.css";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +25,7 @@ function formatDuration(seconds: number | null): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-export default async function OverviewPage() {
+export default async function DashboardPage() {
   let calls: CallLog[] = [];
   let meetings: Meeting[] = [];
   let leads: Lead[] = [];
@@ -57,7 +58,7 @@ export default async function OverviewPage() {
   return (
     <div>
       <header className="page-header">
-        <h1 className="page-title">Overview</h1>
+        <h1 className="page-title">Dashboard</h1>
         <p className="page-subtitle">Rolling last 24 hours of activity.</p>
       </header>
 
@@ -96,10 +97,17 @@ export default async function OverviewPage() {
         </div>
       </div>
 
-      <section className={`panel ${styles.chartPanel}`}>
-        <h2 className={styles.sectionTitle}>Call volume</h2>
-        <HourlyChart hours={buckets} axisLabels={["24h ago", "18h ago", "12h ago", "6h ago", "now"]} />
-      </section>
+      <div className={styles.chartsRow}>
+        <section className={`panel ${styles.chartPanel}`}>
+          <h2 className={styles.sectionTitle}>Call volume</h2>
+          <HourlyChart hours={buckets} axisLabels={["24h ago", "18h ago", "12h ago", "6h ago", "now"]} />
+        </section>
+
+        <section className={`panel ${styles.chartPanel}`}>
+          <h2 className={styles.sectionTitle}>Call outcomes</h2>
+          <OutcomePieChart calls={recentCalls.length > 0 ? recentCalls : calls} />
+        </section>
+      </div>
 
       <section className={styles.recentSection}>
         <div className={styles.recentHeader}>

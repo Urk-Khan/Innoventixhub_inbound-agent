@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import styles from "./Sidebar.module.css";
 
 const NAV = [
-  { href: "/", label: "Overview" },
+  { href: "/", label: "Dashboard" },
   { href: "/calls", label: "Calls" },
   { href: "/bookings", label: "Bookings" },
   { href: "/leads", label: "Leads" },
