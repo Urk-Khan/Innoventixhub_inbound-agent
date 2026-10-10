@@ -8,11 +8,10 @@ export async function login(formData: FormData) {
   const password = formData.get("password");
   const from = (formData.get("from") as string) || "/";
 
-  if (typeof password !== "string" || !process.env.ADMIN_PASSWORD) {
-    redirect(`/login?error=1&from=${encodeURIComponent(from)}`);
-  }
+  const enteredPassword = typeof password === "string" ? password.trim() : "";
+  const expectedPassword = (process.env.ADMIN_PASSWORD || "").trim().replace(/^["']|["']$/g, "");
 
-  if (password !== process.env.ADMIN_PASSWORD) {
+  if (!expectedPassword || enteredPassword !== expectedPassword) {
     redirect(`/login?error=1&from=${encodeURIComponent(from)}`);
   }
 
