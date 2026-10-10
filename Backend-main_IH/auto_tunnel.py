@@ -199,6 +199,28 @@ async def _update_telephony_voice_url(public_url: str) -> None:
 async def setup_tunnel_and_telephony(port: int) -> tuple[asyncio.subprocess.Process | None, str | None]:
     """Returns (cloudflared_process, hostname) — hostname is None (server still runs, just
     not publicly reachable) if anything here fails."""
+    # Check if an explicit public domain/URL is provided (e.g. deployed on Coolify, VPS, etc.)
+    explicit_public_url = (
+        os.getenv("PUBLIC_URL")
+        or os.getenv("SERVER_URL")
+        or os.getenv("COOLIFY_FQDN")
+        or os.getenv("DOMAIN")
+    )
+    if explicit_public_url:
+        explicit_public_url = explicit_public_url.strip()
+        if not explicit_public_url.startswith("http://") and not explicit_public_url.startswith("https://"):
+            explicit_public_url = f"https://{explicit_public_url}"
+        logger.info(f"Using configured public URL: {explicit_public_url}")
+        await _update_telephony_voice_url(explicit_public_url)
+        hostname = (
+            explicit_public_url.replace("https://", "").replace("http://", "").rstrip("/")
+        )
+        return None, hostname
+
+    if os.getenv("DISABLE_TUNNEL", "").lower() in ("1", "true", "yes"):
+        logger.info("Tunnel startup skipped via DISABLE_TUNNEL.")
+        return None, None
+
     try:
         process, public_url = await _start_tunnel(port)
     except Exception as e:
@@ -213,3 +235,4 @@ async def setup_tunnel_and_telephony(port: int) -> tuple[asyncio.subprocess.Proc
 
 # Backward-compatible alias
 setup_tunnel_and_telnyx = setup_tunnel_and_telephony
+

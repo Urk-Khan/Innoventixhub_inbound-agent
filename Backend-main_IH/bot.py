@@ -516,6 +516,7 @@ if __name__ == "__main__":
     from pipecat.runner.run import main
 
     _PORT = int(os.getenv("PORT", "7860"))
+    _HOST = os.getenv("HOST", "0.0.0.0")
 
     async def _startup():
         (tunnel_process, tunnel_hostname), _ = await asyncio.gather(
@@ -538,7 +539,15 @@ if __name__ == "__main__":
         if (os.getenv("SIGNALWIRE_PROJECT_ID") or os.getenv("SIGNALWIRE_SPACE_URL"))
         else "telnyx"
     )
-    sys.argv = [sys.argv[0], "-t", active_transport, "--port", str(_PORT)]
+    sys.argv = [
+        sys.argv[0],
+        "-t",
+        active_transport,
+        "--host",
+        _HOST,
+        "--port",
+        str(_PORT),
+    ]
     if _tunnel_hostname:
         sys.argv += ["--proxy", _tunnel_hostname]
     else:
