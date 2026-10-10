@@ -1,8 +1,9 @@
-# Stage 1: Install dependencies
+# Stage 1: Install dependencies (including devDependencies for building TypeScript)
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+ENV NODE_ENV=development
+RUN npm ci --include=dev
 
 # Stage 2: Build the Next.js app
 FROM node:20-alpine AS builder
