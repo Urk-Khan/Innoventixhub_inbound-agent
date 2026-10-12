@@ -64,8 +64,7 @@ export default async function DashboardPage() {
 
       {loadError && (
         <div className={styles.errorPanel}>
-          Couldn&apos;t load data from Supabase: {loadError}. Check SUPABASE_URL and
-          SUPABASE_SERVICE_KEY in .env.local.
+          Couldn&apos;t load data from Database: {loadError}. Check DATABASE_URL in environment variables.
         </div>
       )}
 

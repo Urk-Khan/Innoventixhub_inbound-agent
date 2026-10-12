@@ -8,6 +8,7 @@ pipecat-ai[anthropic,openai,cartesia,silero,websocket,runner,rnnoise]==1.8.1
 python-dotenv>=1.0.1
 aiohttp>=3.9.0
 loguru>=0.7.2
+asyncpg>=0.29.0
 
 # Google auth (only needed if you switch back to the parked google_sheets.py/
 # google_calendar.py scheduling attempt — not used by the active Cal.com path).

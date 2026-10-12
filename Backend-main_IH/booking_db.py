@@ -1,43 +1,129 @@
 """
-Direct Supabase REST integration for the Innoventix bot's CRM-lite needs: knowing who's
+Direct PostgreSQL integration for the Innoventix bot's CRM-lite needs: knowing who's
 calling (for cross-sell), tracking warm leads who didn't book, and logging meetings for
-reporting. Same plain-aiohttp pattern as google_sheets.py/google_calendar.py — no SDK.
+reporting. Connects directly to local PostgreSQL (via DATABASE_URL or POSTGRES_URL)
+using asyncpg connection pooling.
 
-Three tables (see innoventix_schema.sql for the exact DDL):
-
+Four tables (auto-created on initialization if not exists):
   customers        — pre-populated externally when a deal closes; this bot only READS it
                       (via get_customer_by_phone) to know purchase history for cross-sell.
-                      It does not create purchase records — that's outside an inbound call
-                      bot's scope. If you want the bot itself to record a NEW sale from a
-                      booked meeting, that's a real feature to design, not a default here.
-  leads            — the bot DOES write here (mark_potential_lead in tools.py) whenever a
+  leads            — the bot writes here (mark_potential_lead in tools.py) whenever a
                       caller shows real interest but doesn't commit.
-  meetings         — an audit-trail log of every booked meeting (both sales and support),
-                      written after Sheets+Calendar both succeed. Sheets/Calendar remain the
-                      operational source of truth; this table is for reporting/history only.
-
-SUPABASE_SERVICE_KEY must be the service-role key (bypasses Row Level Security) — never the
-public anon key, and never exposed outside this backend.
+  meetings         — an audit-trail log of every booked meeting (both sales and support).
+  call_logs        — call transcript, duration, and classified outcome.
 """
 
 import asyncio
 import os
-
 import aiohttp
 from loguru import logger
 
-_REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=6)  # keep it fast; caller is on hold
+try:
+    import asyncpg
+except ImportError:
+    asyncpg = None
+
+_pool: "asyncpg.Pool | None" = None
+_pool_lock = asyncio.Lock()
+
+INIT_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS customers (
+  id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+  phone TEXT UNIQUE NOT NULL,
+  name TEXT,
+  email TEXT,
+  purchased_services TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS leads (
+  id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+  name TEXT,
+  phone TEXT,
+  interested_service TEXT,
+  reason TEXT,
+  status TEXT DEFAULT 'warm',
+  call_id TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS meetings (
+  id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+  meeting_type TEXT,
+  customer_name TEXT,
+  phone TEXT,
+  email TEXT,
+  topic TEXT,
+  date TEXT,
+  time TEXT,
+  meet_link TEXT,
+  call_id TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS call_logs (
+  id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+  call_id TEXT,
+  caller_phone TEXT,
+  duration_seconds INTEGER,
+  transcript TEXT,
+  outcome TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+"""
 
 
-def _get_config() -> tuple[str, str]:
-    """Reads SUPABASE_URL/SUPABASE_SERVICE_KEY fresh on every call, rather than once at
-    import time. This matters because Python evaluates module-level code (including
-    `os.getenv(...)` at the top of a file) the instant the module is imported — if
-    `import booking_db` happens before `load_dotenv()` runs (as it did in bot.py until this
-    fix), a module-level constant would be permanently frozen as "" for the life of the
-    process, even though .env gets loaded correctly moments later. Reading fresh inside each
-    function makes this module correct regardless of import order in whatever script uses it."""
+def _get_db_url() -> str:
+    """Returns database connection URL from environment variables."""
+    url = (
+        os.getenv("DATABASE_URL")
+        or os.getenv("POSTGRES_URL")
+        or os.getenv("POSTGRESQL_URL")
+        or ""
+    ).strip()
+    # Normalize postgres:// to postgresql:// for asyncpg
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://") :]
+    return url
+
+
+def _get_supabase_config() -> tuple[str, str]:
+    """Fallback if SUPABASE_URL and SUPABASE_SERVICE_KEY are provided."""
     return os.getenv("SUPABASE_URL", "").rstrip("/"), os.getenv("SUPABASE_SERVICE_KEY", "")
+
+
+async def _get_pool() -> "asyncpg.Pool | None":
+    global _pool
+    if _pool and not _pool._closed:
+        return _pool
+
+    if asyncpg is None:
+        logger.warning("asyncpg is not installed; PostgreSQL operations unavailable")
+        return None
+
+    db_url = _get_db_url()
+    if not db_url:
+        return None
+
+    async with _pool_lock:
+        if _pool and not _pool._closed:
+            return _pool
+        try:
+            pool = await asyncpg.create_pool(
+                dsn=db_url,
+                min_size=1,
+                max_size=10,
+                command_timeout=6,
+            )
+            # Initialize tables if not already created
+            async with pool.acquire() as conn:
+                await conn.execute(INIT_SCHEMA_SQL)
+            _pool = pool
+            logger.info("Successfully connected to PostgreSQL database and initialized schema")
+            return _pool
+        except Exception as e:
+            logger.error(f"Failed to connect to PostgreSQL database: {e}")
+            return None
 
 
 def _headers(service_key: str, prefer: str = "return=representation") -> dict:
@@ -52,25 +138,42 @@ def _headers(service_key: str, prefer: str = "return=representation") -> dict:
 async def get_customer_by_phone(phone: str) -> dict | None:
     """Looks up a customer by phone number for the pre-greeting context injection in
     bot.py. Returns None if not configured, not found, or on any error — bot.py treats
-    None as "unknown caller" and proceeds with a plain greeting, so this fails safe."""
-    supabase_url, supabase_key = _get_config()
-    if not supabase_url or not supabase_key or not phone:
+    None as 'unknown caller' and proceeds with a plain greeting, so this fails safe."""
+    if not phone:
         return None
 
-    url = f"{supabase_url}/rest/v1/customers?phone=eq.{phone}&select=*"
+    pool = await _get_pool()
+    if pool:
+        try:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT id, phone, name, email, purchased_services, created_at FROM customers WHERE phone = $1 LIMIT 1",
+                    phone,
+                )
+                if row:
+                    return dict(row)
+                return None
+        except Exception as e:
+            logger.error(f"PostgreSQL customer lookup failed: {e}")
+            return None
 
-    try:
-        async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
-            async with session.get(url, headers=_headers(supabase_key)) as resp:
-                if resp.status >= 400:
-                    logger.error(f"Customer lookup failed ({resp.status}): {await resp.text()}")
-                    return None
-                rows = await resp.json()
-    except Exception as e:
-        logger.error(f"Customer lookup request failed: {e}")
-        return None
+    # Fallback to Supabase REST if configured
+    supabase_url, supabase_key = _get_supabase_config()
+    if supabase_url and supabase_key:
+        url = f"{supabase_url}/rest/v1/customers?phone=eq.{phone}&select=*"
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=6)) as session:
+                async with session.get(url, headers=_headers(supabase_key)) as resp:
+                    if resp.status >= 400:
+                        logger.error(f"Customer lookup failed ({resp.status}): {await resp.text()}")
+                        return None
+                    rows = await resp.json()
+                    return rows[0] if rows else None
+        except Exception as e:
+            logger.error(f"Customer lookup request failed: {e}")
+            return None
 
-    return rows[0] if rows else None
+    return None
 
 
 async def create_lead(
@@ -83,9 +186,31 @@ async def create_lead(
 ) -> dict:
     """Logs a warm lead — a caller who showed real interest but didn't book. Returns
     {"success": bool, "error": str | None}."""
-    supabase_url, supabase_key = _get_config()
+    pool = await _get_pool()
+    if pool:
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO leads (name, phone, interested_service, reason, status, call_id)
+                    VALUES ($1, $2, $3, $4, 'warm', $5)
+                    """,
+                    name,
+                    phone,
+                    interested_service,
+                    reason,
+                    call_id,
+                )
+                logger.info(f"Logged warm lead in PostgreSQL: {name} ({phone}) — interested in {interested_service}")
+                return {"success": True, "error": None}
+        except Exception as e:
+            logger.error(f"PostgreSQL lead insert failed: {e}")
+            return {"success": False, "error": "db_insert_failed"}
+
+    # Fallback to Supabase REST if configured
+    supabase_url, supabase_key = _get_supabase_config()
     if not supabase_url or not supabase_key:
-        logger.error("SUPABASE_URL or SUPABASE_SERVICE_KEY not set in .env")
+        logger.error("DATABASE_URL (or SUPABASE_URL/SUPABASE_SERVICE_KEY) not set in environment")
         return {"success": False, "error": "db_not_configured"}
 
     payload = {
@@ -98,7 +223,7 @@ async def create_lead(
     }
 
     try:
-        async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=6)) as session:
             async with session.post(
                 f"{supabase_url}/rest/v1/leads",
                 json=payload,
@@ -131,9 +256,35 @@ async def log_meeting(
     """Fire-and-forget audit log of a successfully booked meeting. Never raises — Cal.com is
     the real booking; this is reporting only, so a logging failure here should never surface
     as a booking failure to the caller."""
-    supabase_url, supabase_key = _get_config()
+    pool = await _get_pool()
+    if pool:
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO meetings (meeting_type, customer_name, phone, email, topic, date, time, meet_link, call_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    """,
+                    meeting_type,
+                    customer_name,
+                    phone,
+                    email,
+                    topic,
+                    date,
+                    time_str,
+                    meet_link,
+                    call_id,
+                )
+                logger.info(f"Logged meeting in PostgreSQL: {customer_name} ({date} at {time_str})")
+                return
+        except Exception as e:
+            logger.warning(f"PostgreSQL meeting log insert failed: {e}")
+            return
+
+    # Fallback to Supabase REST if configured
+    supabase_url, supabase_key = _get_supabase_config()
     if not supabase_url or not supabase_key:
-        logger.error("SUPABASE_URL or SUPABASE_SERVICE_KEY not set in .env — meeting not logged")
+        logger.error("DATABASE_URL or Supabase credentials not set — meeting not logged")
         return
 
     payload = {
@@ -149,7 +300,7 @@ async def log_meeting(
     }
 
     try:
-        async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=6)) as session:
             async with session.post(
                 f"{supabase_url}/rest/v1/meetings",
                 json=payload,
@@ -159,6 +310,8 @@ async def log_meeting(
                     logger.warning(f"Meeting log insert failed ({resp.status}): {await resp.text()}")
     except Exception as e:
         logger.warning(f"Meeting log request failed: {e}")
+
+
 async def _classify_transcript_with_ai(transcript: str) -> str:
     """Uses LLM to classify non-meeting call outcomes with high precision."""
     openai_key = os.getenv("OPENAI_API_KEY", "")
@@ -181,7 +334,7 @@ Return ONLY the single word label: warm_lead, info_inquiry, or transferred."""
         client = AsyncOpenAI(api_key=openai_key)
         resp = await asyncio.wait_for(
             client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-5.4-mini"),
+                model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
                 max_completion_tokens=10,
@@ -205,17 +358,8 @@ async def save_call_record(
     explicit_outcome: str | None = None,
 ) -> bool:
     """Fire-and-forget call log: extracts transcript, classifies outcome, and inserts into
-    the call_logs table. Never raises — a logging failure must never surface as a call failure.
-
-    `messages` is the raw LLM context message list (list of dicts with 'role' and 'content').
-    Only 'user' and 'assistant' turns with non-system content are included in the transcript.
-    """
-    supabase_url, supabase_key = _get_config()
-    if not supabase_url or not supabase_key:
-        logger.error("SUPABASE_URL or SUPABASE_SERVICE_KEY not set in .env — call not logged")
-        return False
-
-    # Build a clean dialog transcript, skipping internal system injections.
+    the call_logs table. Never raises — a logging failure must never surface as a call failure."""
+    # Build clean dialog transcript
     lines = []
     for msg in messages:
         if isinstance(msg, dict):
@@ -230,7 +374,6 @@ async def save_call_record(
         content = str(raw_content).strip()
         if not content or content == "None":
             continue
-        # Skip internal context-injection messages (bracketed system notes).
         if content.startswith("[") and content.endswith("]"):
             continue
         if role == "user":
@@ -241,16 +384,103 @@ async def save_call_record(
     transcript = "\n".join(lines)
     duration = max(1, int(__import__("time").time() - start_time))
 
-    # Determine outcome with priority:
-    # 1. Explicit outcome passed by caller/tools
-    # 2. Database cross-check (did this call_id create a meeting or lead?)
-    # 3. Intelligent AI / heuristic classification (NEVER falsely assume meeting_booked)
     outcome = explicit_outcome
+    pool = await _get_pool()
+
+    if pool:
+        try:
+            async with pool.acquire() as conn:
+                # 1. Did this call_id create a meeting?
+                if outcome != "meeting_booked" and call_id:
+                    m_row = await conn.fetchrow("SELECT id FROM meetings WHERE call_id = $1 LIMIT 1", call_id)
+                    if m_row:
+                        outcome = "meeting_booked"
+
+                # 2. Check if already logged as warm lead
+                if not outcome and call_id:
+                    l_row = await conn.fetchrow("SELECT id FROM leads WHERE call_id = $1 LIMIT 1", call_id)
+                    if l_row:
+                        outcome = "warm_lead"
+
+                # 3. Short / dropped call
+                if not outcome and len(lines) <= 2 and duration < 25:
+                    outcome = "dropped_call"
+
+                # 4. Live transfer
+                if not outcome and (outcome == "transferred" or explicit_outcome == "transferred"):
+                    outcome = "transferred"
+
+                # 5. AI / rule-based classification
+                if not outcome:
+                    ai_res = await _classify_transcript_with_ai(transcript)
+                    if ai_res:
+                        outcome = ai_res
+                    else:
+                        t_lower = transcript.lower()
+                        if any(w in t_lower for w in ["send me", "email", "booking link", "busy right now", "call back", "quote", "proposal", "check with my", "think about it"]):
+                            outcome = "warm_lead"
+                        elif any(w in t_lower for w in ["transfer", "human", "agent", "specialist"]):
+                            outcome = "transferred"
+                        else:
+                            outcome = "info_inquiry"
+
+                # 6. Auto-log warm lead if not already logged
+                if outcome == "warm_lead" and call_id:
+                    l_chk = await conn.fetchrow("SELECT id FROM leads WHERE call_id = $1 LIMIT 1", call_id)
+                    if not l_chk:
+                        service = "General Services"
+                        t_lower = transcript.lower()
+                        if "website" in t_lower or "web dev" in t_lower:
+                            service = "Web Development & SEO" if "seo" in t_lower else "Web Development"
+                        elif "seo" in t_lower:
+                            service = "SEO"
+                        elif "voice agent" in t_lower or "receptionist" in t_lower:
+                            service = "AI Voice Agents"
+                        elif "automation" in t_lower:
+                            service = "AI Automation"
+                        elif "content" in t_lower or "video" in t_lower:
+                            service = "Content Creation"
+
+                        await conn.execute(
+                            """
+                            INSERT INTO leads (name, phone, interested_service, reason, status, call_id)
+                            VALUES ($1, $2, $3, $4, 'warm', $5)
+                            """,
+                            "Caller (Interested Lead)",
+                            caller_phone or "Unknown",
+                            service,
+                            "Showed interest / requested follow-up during call",
+                            call_id,
+                        )
+
+                # Insert into call_logs
+                await conn.execute(
+                    """
+                    INSERT INTO call_logs (call_id, caller_phone, duration_seconds, transcript, outcome)
+                    VALUES ($1, $2, $3, $4, $5)
+                    """,
+                    call_id,
+                    caller_phone,
+                    duration,
+                    transcript or "No transcript captured",
+                    outcome,
+                )
+                logger.info(f"Call record saved in PostgreSQL: {outcome}, {duration}s, caller={caller_phone}, id={call_id}")
+                return True
+        except Exception as e:
+            logger.warning(f"PostgreSQL call log save failed: {e}")
+            return False
+
+    # Fallback to Supabase REST if PostgreSQL pool is not available
+    supabase_url, supabase_key = _get_supabase_config()
+    if not supabase_url or not supabase_key:
+        logger.error("DATABASE_URL or Supabase credentials not set — call not logged")
+        return False
 
     # 1. Only a real meeting booked via Cal.com / meetings table is "meeting_booked"
     if outcome != "meeting_booked" and call_id:
         try:
-            async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=6)) as session:
                 async with session.get(
                     f"{supabase_url}/rest/v1/meetings?call_id=eq.{call_id}&select=id",
                     headers=_headers(supabase_key),
@@ -265,7 +495,7 @@ async def save_call_record(
     # 2. Check if already logged as warm lead in database
     if not outcome and call_id:
         try:
-            async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=6)) as session:
                 async with session.get(
                     f"{supabase_url}/rest/v1/leads?call_id=eq.{call_id}&select=id",
                     headers=_headers(supabase_key),
@@ -277,8 +507,7 @@ async def save_call_record(
         except Exception as e:
             logger.debug(f"Leads check skipped: {e}")
 
-    # 3. Check for dropped call (short call with minimal speech)
-    # Preserves user's frontend mapping to Customer Support
+    # 3. Check for dropped call
     if not outcome and len(lines) <= 2 and duration < 25:
         outcome = "dropped_call"
 
@@ -286,14 +515,12 @@ async def save_call_record(
     if not outcome and (outcome == "transferred" or explicit_outcome == "transferred"):
         outcome = "transferred"
 
-    # 5. Intelligent classification for remaining non-meeting calls
-    # CRITICAL: NEVER default to meeting_booked here!
+    # 5. Intelligent classification
     if not outcome:
         ai_res = await _classify_transcript_with_ai(transcript)
         if ai_res:
             outcome = ai_res
         else:
-            # Rule-based fallback — NEVER set meeting_booked here!
             t_lower = transcript.lower()
             if any(w in t_lower for w in ["send me", "email", "booking link", "busy right now", "call back", "quote", "proposal", "check with my", "think about it"]):
                 outcome = "warm_lead"
@@ -302,10 +529,10 @@ async def save_call_record(
             else:
                 outcome = "info_inquiry"
 
-    # 6. If outcome is warm_lead and no lead entry exists yet in leads table, auto-log it
+    # 6. Auto-log warm lead
     if outcome == "warm_lead" and call_id:
         try:
-            async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=6)) as session:
                 async with session.get(
                     f"{supabase_url}/rest/v1/leads?call_id=eq.{call_id}&select=id",
                     headers=_headers(supabase_key),
@@ -344,7 +571,7 @@ async def save_call_record(
     }
 
     try:
-        async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=6)) as session:
             async with session.post(
                 f"{supabase_url}/rest/v1/call_logs",
                 json=payload,
