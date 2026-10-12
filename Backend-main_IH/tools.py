@@ -30,26 +30,85 @@ import email_sender
 
 
 def _normalize_email(raw: str) -> str:
-    """Convert spoken email transcriptions to valid addresses.
+    """Convert spoken email transcriptions to clean, valid addresses.
     Handles forms like:
-      'john dot doe at gmail dot com' -> 'john.doe@gmail.com'
+      'junaid dot khan at innoventix hub dot tech' -> 'junaid.khan@innoventixhub.tech'
+      'j-u-n-a-i-d dot k-h-a-n at innoventixhub dot tech' -> 'junaid.khan@innoventixhub.tech'
       'alex underscore smith at acme dot co dot uk' -> 'alex_smith@acme.co.uk'
-      'j-o-h-n at company dot com' -> 'john@company.com'
-    Strips accidental whitespace throughout.
+      'john dot doe at gmail dot com' -> 'john.doe@gmail.com'
+      'junaid dot k zero triple three at gmail dot com' -> 'junaid.k0333@gmail.com'
+    Strips accidental whitespace, brackets, spelled dashes, and fixes common telephony domain slips.
     """
     if not raw:
         return ""
     s = str(raw).lower().strip()
-    # Replace spoken punctuation
-    s = re.sub(r"\s+dot\s+", ".", s)       # "dot" -> "."
-    s = re.sub(r"\s+at\s+", "@", s)        # "at" -> "@"
-    s = re.sub(r"\s+underscore\s+", "_", s) # "underscore" -> "_"
-    s = re.sub(r"\s+dash\s+", "-", s)      # "dash" -> "-"
-    # Remove spaces between spelled-out letters (e.g. "j o h n" -> "john")
-    # Only do this for single-char segments between spaces, not whole words
-    s = re.sub(r"(?<=\b[a-z])\s+(?=[a-z]\b)", "", s)
-    # Strip any remaining whitespace
-    s = s.replace(" ", "")
+    # Strip enclosing punctuation or quotes
+    s = s.strip("<>()[]\"'` \t\r\n.,;:")
+
+    # Normalize spoken words and bracketed variations
+    s = re.sub(r"[\(\[\{]\s*(?:dot|point|\.)\s*[\)\]\}]", ".", s)
+    s = re.sub(r"[\(\[\{]\s*(?:at|@)\s*[\)\]\}]", "@", s)
+    s = re.sub(r"\b(?:dot|point)\b", ".", s)
+    s = re.sub(r"\b(?:at the rate of|at the rate|at sign|at)\b", "@", s)
+    s = re.sub(r"\b(?:underscore)\b", "_", s)
+    s = re.sub(r"\b(?:dash|hyphen)\b", "-", s)
+
+    # Common speech-to-text slips for major global providers (Gmail, Outlook, Yahoo, Hotmail, iCloud)
+    s = re.sub(r"@\s*(?:g\s*mail|gee\s*mail)\b", "@gmail", s)
+    s = re.sub(r"@\s*(?:out\s*look)\b", "@outlook", s)
+    s = re.sub(r"@\s*(?:hot\s*mail)\b", "@hotmail", s)
+    s = re.sub(r"@\s*(?:i\s*cloud|eye\s*cloud)\b", "@icloud", s)
+    s = re.sub(r"@\s*(?:ya\s*hoo)\b", "@yahoo", s)
+
+    # Convert spoken numbers and multipliers in email usernames:
+    # 'triple three' / 'triple t' -> '333', 'double zero' -> '00', 'zero' -> '0'
+    _word_to_digit = {
+        "zero": "0", "oh": "0", "o": "0",
+        "one": "1", "two": "2", "to": "2", "too": "2",
+        "three": "3", "tree": "3", "t": "3",
+        "four": "4", "for": "4", "five": "5",
+        "six": "6", "seven": "7", "eight": "8", "ate": "8", "nine": "9",
+    }
+
+    def _rep_triple(m):
+        w = m.group(1).lower()
+        d = _word_to_digit.get(w, w if w.isdigit() else "")
+        return (d * 3) if d else m.group(0)
+
+    s = re.sub(r"\btriple\s+([a-z0-9]+)\b", _rep_triple, s)
+
+    def _rep_double(m):
+        w = m.group(1).lower()
+        d = _word_to_digit.get(w, w if w.isdigit() else "")
+        return (d * 2) if d else m.group(0)
+
+    s = re.sub(r"\bdouble\s+([a-z0-9]+)\b", _rep_double, s)
+
+    for w, d in [
+        ("zero", "0"), ("one", "1"), ("two", "2"), ("three", "3"),
+        ("four", "4"), ("five", "5"), ("six", "6"), ("seven", "7"),
+        ("eight", "8"), ("nine", "9")
+    ]:
+        s = re.sub(rf"\b{w}\b", d, s)
+
+    # Collapse spelled-out letters with dashes or spaces: 'j-u-n-a-i-d' or 'j u n a i d' -> 'junaid'
+    for _ in range(12):
+        s = re.sub(r"(?<=\b[a-z0-9])[- ]+(?=[a-z0-9]\b)", "", s)
+
+    # Remove all remaining whitespace
+    s = re.sub(r"\s+", "", s)
+
+    # Strip stray periods around @ or ends
+    s = re.sub(r"\.+@", "@", s)
+    s = re.sub(r"@\.+", "@", s)
+    s = s.strip(".")
+
+    # Common domain corrections for Innoventix Hub emails
+    if "@innoventix" in s:
+        s = re.sub(r"@innoventix(?:hub)?\.[a-z0-9.]+$", "@innoventixhub.tech", s)
+        s = re.sub(r"@innoventix$", "@innoventixhub.tech", s)
+        s = re.sub(r"@innoventixhub$", "@innoventixhub.tech", s)
+
     return s
 
 
